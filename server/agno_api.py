@@ -38,19 +38,41 @@ def _safe_load_env() -> None:
 
 _safe_load_env()
 
+# 信任的東南亞新聞來源
+TRUSTED_NEWS_SOURCES = [
+    {"name": "VietJo", "domain": "viet-jo.com", "region": "Vietnam"},
+    {"name": "Cafef", "domain": "cafef.vn", "region": "Vietnam"},
+    {"name": "VNExpress", "domain": "vnexpress.net", "region": "Vietnam"},
+    {"name": "Vietnam Finance", "domain": "vietnamfinance.vn", "region": "Vietnam"},
+    {"name": "Vietnam Investment Review", "domain": "vir.com.vn", "region": "Vietnam"},
+    {"name": "Vietnambiz", "domain": "vietnambiz.vn", "region": "Vietnam"},
+    {"name": "Tap Chi Tai chinh", "domain": "tapchikinhtetaichinh.vn", "region": "Vietnam"},
+    {"name": "Bangkok Post", "domain": "bangkokpost.com", "region": "Thailand"},
+    {"name": "Techsauce", "domain": "techsauce.co", "region": "Thailand"},
+    {"name": "Fintech Singapore", "domain": "fintechnews.sg", "region": "Singapore"},
+    {"name": "Fintech Philippines", "domain": "fintechnews.ph", "region": "Philippines"},
+    {"name": "Khmer Times", "domain": "khmertimeskh.com", "region": "Cambodia"},
+    {"name": "柬中時報", "domain": "cc-times.com", "region": "Cambodia"},
+    {"name": "The Phnom Penh Post", "domain": "phnompenhpost.com", "region": "Cambodia"},
+    {"name": "Deal Street Asia", "domain": "dealstreetasia.com", "region": "Southeast Asia"},
+    {"name": "Tech in Asia", "domain": "techinasia.com", "region": "Southeast Asia"},
+    {"name": "Nikkei Asia", "domain": "asia.nikkei.com", "region": "Southeast Asia"},
+    {"name": "Heaptalk", "domain": "heaptalk.com", "region": "Southeast Asia"},
+]
+
 TEAM_INSTRUCTIONS = [
-    "你是企業金融 RM（Relationship Manager）授信報告助理，專精於企業授信分析、風險評估與金融市場研究。",
-    "你可以與使用者自然對話，回答授信、金融、企業分析相關問題。",
+    "你是東南亞新聞輿情分析助理，專精於東南亞區域新聞搜尋、翻譯與深度分析。",
+    "你可以與使用者自然對話，協助搜尋、摘要、翻譯東南亞各國的新聞資訊。",
     "",
     "【重要】根據使用者意圖選擇回覆模式：",
     "1. 問候/閒聊（如 hi, hello, 你好）→ 使用「簡單模式」",
-    "2. 需要文件分析（如 摘要、翻譯、報告）→ 使用「完整模式」並委派 RAG Agent（文件檢索）",
-    "3. 需要市場/即時資訊（企業、產業、新聞、股市、總經事件）→ 使用「完整模式」並委派 Web Research Agent，必須使用 web_search 工具先查後答，不可直接拒絕。",
+    "2. 需要新聞文件分析（如 摘要、翻譯）→ 使用「完整模式」並委派 RAG Agent（文件檢索）",
+    "3. 需要搜尋新聞/市場資訊（新聞、產業動態、政策變化）→ 使用「完整模式」並委派 Deep Research Agent，必須使用 web_search 工具執行深度搜尋，優先搜尋信任新聞來源，不可直接拒絕。",
     "4. 使用者提供截圖/照片/影像 → 委派 Vision Agent 讀圖與 OCR，並回傳重點與文字內容。",
     "若本次任務包含 OCR 文字，請在 summary.output 產出該文件的摘要。",
     "",
     "【簡單模式】僅填充 assistant.content，其他欄位必須為空或空陣列：",
-    '{"assistant": {"content": "你好！有什麼可以幫助你的嗎？", "bullets": []}, "summary": {"output": "", "borrower": null, "metrics": [], "risks": []}, "translation": {"output": "", "clauses": []}, "memo": {"output": "", "sections": [], "recommendation": "", "conditions": ""}, "routing": []}',
+    '{"assistant": {"content": "你好！我是東南亞新聞輿情分析助理，可以協助您搜尋、摘要、翻譯東南亞各國新聞。有什麼我能幫忙的嗎？", "bullets": []}, "summary": {"output": "", "borrower": null, "metrics": [], "risks": []}, "translation": {"output": "", "clauses": []}, "memo": {"output": "", "sections": [], "recommendation": "", "conditions": ""}, "routing": []}',
     "",
     "【完整模式】填充相關 artifacts 並記錄 routing 步驟",
     "",
@@ -67,22 +89,22 @@ TEAM_INSTRUCTIONS = [
 EXPECTED_OUTPUT = """
 簡單模式範例（問候/閒聊）：
 {
-  "assistant": { "content": "你好！我是授信報告助理，可以協助您進行企業授信分析、文件摘要、翻譯等工作。有什麼我能幫忙的嗎？", "bullets": [] },
+  "assistant": { "content": "你好！我是東南亞新聞輿情分析助理，可以協助您搜尋、摘要、翻譯東南亞各國新聞。有什麼我能幫忙的嗎？", "bullets": [] },
   "summary": { "output": "", "borrower": null, "metrics": [], "risks": [], "source_doc_id": "" },
   "translation": { "output": "", "clauses": [], "source_doc_id": "" },
   "memo": { "output": "", "sections": [], "recommendation": "", "conditions": "" },
   "routing": []
 }
 
-完整模式範例（文件分析/市場查詢）：
+完整模式範例（新聞搜尋/分析）：
 {
-  "assistant": { "content": "已完成文件摘要分析", "bullets": ["識別借款人資訊", "分析財務指標", "評估風險等級"] },
+  "assistant": { "content": "已完成新聞搜尋與分析", "bullets": ["搜尋東南亞新聞來源", "提取關鍵資訊", "生成摘要分析"] },
   "summary": {
-    "output": "## 摘要內容...",
-    "source_doc_id": "doc-1",
-    "borrower": { "name": "公司名稱", "description": "簡介", "rating": "A+" },
-    "metrics": [{ "label": "營收", "value": "100M", "delta": "+10%" }],
-    "risks": [{ "label": "市場風險", "level": "Medium" }]
+    "output": "## 新聞摘要\n找到 5 篇相關新聞...",
+    "source_doc_id": "news-1",
+    "borrower": { "name": "新聞標題", "description": "來源與摘要", "rating": "" },
+    "metrics": [{ "label": "發布時間", "value": "2025-12-29", "delta": "" }],
+    "risks": [{ "label": "資訊可信度", "level": "Low" }]
   },
   "translation": { "output": "", "clauses": [], "source_doc_id": "" },
   "memo": { "output": "", "sections": [], "recommendation": "", "conditions": "" },
@@ -767,7 +789,50 @@ def format_reasoning_steps(steps: Any) -> str:
 
 
 def map_event_to_trace_event(event: Any) -> Optional[Dict[str, Any]]:
-    # Trace streaming disabled
+    """將 Agno event 轉換為 trace event 以供前端顯示"""
+    if not isinstance(event, (RunEvent, TeamRunEvent)):
+        return None
+    
+    event_type = getattr(event, "event", None)
+    if not event_type:
+        return None
+    
+    # 捕捉工具調用事件（特別是 web_search）
+    if event_type == "tool_call_started":
+        tool_name = getattr(event, "tool_name", None)
+        tool_args = getattr(event, "tool_arguments", {})
+        if tool_name == "web_search_preview":
+            query = tool_args.get("query", "")
+            return {
+                "type": "tool_call",
+                "tool": "web_search",
+                "message": f"🔍 搜尋中: {query}",
+                "args": tool_args,
+            }
+        return {
+            "type": "tool_call",
+            "tool": tool_name,
+            "message": f"⚙️ 調用工具: {tool_name}",
+        }
+    
+    # 捕捉工具調用結果
+    if event_type == "tool_call_completed":
+        tool_name = getattr(event, "tool_name", None)
+        if tool_name == "web_search_preview":
+            return {
+                "type": "tool_result",
+                "tool": "web_search",
+                "message": "✅ 搜尋完成",
+            }
+    
+    # 捕捉代理委派事件
+    if event_type == "agent_delegated":
+        agent_name = getattr(event, "agent_name", "Agent")
+        return {
+            "type": "delegation",
+            "message": f"📤 委派給: {agent_name}",
+        }
+    
     return None
 
 
@@ -826,14 +891,69 @@ def build_rag_agent(doc_ids: List[str], model: OpenAIChat) -> Agent:
 
 
 def build_research_agent() -> Agent:
+    """建立 Deep Research Agent，專門執行東南亞新聞搜尋"""
     model = get_model(enable_web_search=True, model_id=get_research_model_id())
+    
+    # 構建按區域分組的 site: 語法查詢模板
+    region_site_queries = {}
+    for src in TRUSTED_NEWS_SOURCES:
+        region = src["region"]
+        if region not in region_site_queries:
+            region_site_queries[region] = []
+        region_site_queries[region].append(f"site:{src['domain']}")
+    
+    # 構建每個區域的完整 site: OR 查詢
+    region_queries = {}
+    for region, sites in region_site_queries.items():
+        region_queries[region] = " OR ".join(sites)
+    
+    # 構建指令文字
+    query_templates = "\n".join([
+        f"  - {region}: ({sites})"
+        for region, sites in region_queries.items()
+    ])
+    
     return Agent(
-        name="Web Research Agent",
-        role="網路檢索與深度研究",
+        name="Deep Research Agent",
+        role="東南亞新聞深度搜尋專員",
         model=model,
         instructions=[
-            "遇到需要即時新聞、市場、總經或網路資訊時，必須執行 web_search 並給出引用來源。",
-            "可進行多輪搜尋與歸納，避免主觀推測，缺資料時請說明。",
+            "你是東南亞新聞搜尋專員，負責使用 web_search 工具搜尋東南亞各國新聞。",
+            "",
+            "【核心規則 - 必須遵守】",
+            "⚠️ 每次搜尋都必須使用 site: 語法限定信任網域，絕對不可省略！",
+            "⚠️ 搜尋查詢格式：<關鍵字> <site語法> <時間限制>",
+            "",
+            "【信任網域查詢模板 - 直接複製使用】",
+            query_templates,
+            "",
+            "【搜尋步驟】",
+            "1. 識別使用者要查詢的區域（Vietnam/Thailand/Singapore/Cambodia等）",
+            "2. 從上方模板複製對應區域的完整 site: 語法",
+            "3. 組合完整查詢：<使用者關鍵字> <site語法> after:<日期>",
+            "4. 使用 web_search 工具執行搜尋",
+            "",
+            "【正確查詢範例】",
+            "✅ Vietnam fintech (site:viet-jo.com OR site:cafef.vn OR site:vnexpress.net OR site:vietnamfinance.vn OR site:vir.com.vn OR site:vietnambiz.vn OR site:tapchikinhtetaichinh.vn) after:2025-12-20",
+            "✅ Singapore央行政策 (site:fintechnews.sg) after:2025-12-01",
+            "✅ Thailand數位支付 (site:bangkokpost.com OR site:techsauce.co) after:2025-12-15",
+            "",
+            "【錯誤查詢範例 - 禁止使用】",
+            "❌ Vietnam fintech news  (缺少 site: 語法)",
+            "❌ fintech site:google.com  (使用了非信任網域)",
+            "❌ Singapore news  (沒有限定網域)",
+            "",
+            "【結果處理】",
+            "1. 驗證每個結果的網域是否在信任清單中",
+            "2. 提取：標題、來源網站、URL、發布時間、摘要",
+            "3. 若結果來自非信任網域，必須過濾掉",
+            "4. 以結構化 JSON 格式回傳結果",
+            "",
+            "【重要提醒】",
+            "- 絕對不可省略 site: 語法，否則會搜尋到不可信的來源",
+            "- 每個搜尋查詢開頭必須先說明使用的 site: 語法",
+            "- 若找不到信任來源的新聞，建議擴大時間範圍或調整關鍵字",
+            "- 避免憑記憶回答，必須實際執行搜尋",
         ],
         tools=[WEB_SEARCH_TOOL],
         search_knowledge=True,
@@ -866,7 +986,7 @@ def build_team(
     research_agent = build_research_agent()
     vision_agent = build_vision_agent()
     return Team(
-        name="授信報告助理",
+        name="東南亞新聞輿情分析助理",
         members=[rag_agent, research_agent, vision_agent],
         model=model,
         instructions=TEAM_INSTRUCTIONS,
@@ -878,6 +998,7 @@ def build_team(
         delegate_to_all_members=False,  # Team Leader decides when to delegate
         store_events=STORE_EVENTS,
         markdown=False,
+        stream=enable_web_search,  # 啟用 streaming 當使用 web search
     )
 
 

@@ -24,6 +24,8 @@ from agno.models.openai.responses import OpenAIResponses
 
 from rag_store import RagStore
 from tag_store import get_doc_tags, load_tag_store, set_custom_tags, set_doc_tags
+from email_service import send_email_with_attachment, generate_news_report_html
+from excel_service import generate_news_excel, cleanup_old_exports
 
 
 # Robust .env loader to avoid parser crashes on some environments.
@@ -67,9 +69,27 @@ TEAM_INSTRUCTIONS = [
     "【重要】根據使用者意圖選擇回覆模式：",
     "1. 問候/閒聊（如 hi, hello, 你好）→ 使用「簡單模式」",
     "2. 需要新聞文件分析（如 摘要、翻譯）→ 使用「完整模式」並委派 RAG Agent（文件檢索）",
-    "3. 需要搜尋新聞/市場資訊（新聞、產業動態、政策變化）→ 使用「完整模式」並委派 Deep Research Agent，必須使用 web_search 工具執行深度搜尋，優先搜尋信任新聞來源，不可直接拒絕。",
+    "3. 需要搜尋新聞/市場資訊（新聞、產業動態、政策變化）→ 使用「新聞搜尋模式」並委派 Deep Research Agent，必須使用 web_search 工具執行深度搜尋，優先搜尋信任新聞來源。",
     "4. 使用者提供截圖/照片/影像 → 委派 Vision Agent 讀圖與 OCR，並回傳重點與文字內容。",
     "若本次任務包含 OCR 文字，請在 summary.output 產出該文件的摘要。",
+    "",
+    "【新聞搜尋模式 - 輸出格式要求】",
+    "當執行新聞搜尋時，assistant.content 必須包含 Markdown 格式的新聞列表，每則新聞包含：",
+    "- 新聞標題（使用 ### 標記）",
+    "- 發布時間（格式：YYYY-MM-DD 或 YYYY年MM月DD日）",
+    "- 新聞摘要（1-2 段文字）",
+    "- 新聞來源連結（完整 URL）",
+    "",
+    "範例格式：",
+    "### 越南央行宣布降息 0.5 個百分點",
+    "發布時間：2025-12-28",
+    "越南國家銀行（SBV）今日宣布將基準利率下調 0.5 個百分點至 4.5%，這是今年第三次降息。此舉旨在刺激經濟成長並支持企業融資。",
+    "https://vnexpress.net/economy/example-url",
+    "",
+    "### 泰國通過新投資促進法案",
+    "發布時間：2025-12-27",
+    "泰國內閣批准新的投資促進法案，為外國投資者提供最高 8 年的稅收優惠。重點產業包括電動車、數位經濟和生物科技。",
+    "https://bangkokpost.com/business/example-url",
     "",
     "【簡單模式】僅填充 assistant.content，其他欄位必須為空或空陣列：",
     '{"assistant": {"content": "你好！我是東南亞新聞輿情分析助理，可以協助您搜尋、摘要、翻譯東南亞各國新聞。有什麼我能幫忙的嗎？", "bullets": []}, "summary": {"output": "", "borrower": null, "metrics": [], "risks": []}, "translation": {"output": "", "clauses": []}, "memo": {"output": "", "sections": [], "recommendation": "", "conditions": ""}, "routing": []}',
@@ -943,22 +963,36 @@ def build_research_agent() -> Agent:
             "❌ fintech site:google.com  (使用了非信任網域)",
             "❌ Singapore news  (沒有限定網域)",
             "",
-            "【結果處理】",
-            "1. 驗證每個結果的網域是否在信任清單中",
-            "2. 提取：標題、來源網站、URL、發布時間、摘要",
-            "3. 若結果來自非信任網域，必須過濾掉",
-            "4. 以結構化 JSON 格式回傳結果",
+            "【輸出格式 - Markdown 新聞列表】",
+            "必須以 Markdown 格式輸出，每則新聞包含：",
+            "- 標題（使用 ### 標記）",
+            "- 發布時間（格式：YYYY-MM-DD 或 YYYY年MM月DD日）",
+            "- 新聞摘要（1-3 段簡潔說明）",
+            "- 新聞來源連結（完整 URL）",
+            "- 每則新聞之間用空行分隔",
+            "",
+            "範例輸出：",
+            "### 越南央行宣布降息 0.5 個百分點",
+            "發布時間：2025-12-28",
+            "越南國家銀行（SBV）今日宣布將基準利率下調 0.5 個百分點至 4.5%，這是今年第三次降息。此舉旨在刺激經濟成長並支持企業融資。",
+            "https://vnexpress.net/economy/example-url",
+            "",
+            "### 泰國通過新投資促進法案",
+            "發布時間：2025-12-27",
+            "泰國內閣批准新的投資促進法案，為外國投資者提供最高 8 年的稅收優惠。重點產業包括電動車、數位經濟和生物科技。",
+            "https://bangkokpost.com/business/example-url",
             "",
             "【重要提醒】",
-            "- 絕對不可省略 site: 語法，否則會搜尋到不可信的來源",
-            "- 每個搜尋查詢開頭必須先說明使用的 site: 語法",
+            "- 必須輸出 Markdown 格式，不要使用 JSON",
+            "- 每則新聞都要包含完整的 URL 連結",
+            "- 絕對不可省略 site: 語法",
+            "- 驗證每個結果的網域是否在信任清單中",
             "- 若找不到信任來源的新聞，建議擴大時間範圍或調整關鍵字",
-            "- 避免憑記憶回答，必須實際執行搜尋",
         ],
         tools=[WEB_SEARCH_TOOL],
         search_knowledge=True,
         add_knowledge_to_context=True,
-        markdown=False,
+        markdown=True,  # 啟用 Markdown 輸出
     )
 
 
@@ -1460,3 +1494,113 @@ async def generate_artifacts(req: ArtifactRequest):
             "error": "LLM request failed",
             "detail": str(exc),
         }
+
+
+class ExportNewsRequest(BaseModel):
+    """匯出新聞請求"""
+    document_id: str = Field(..., description="文件 ID")
+    document_name: str = Field(..., description="文件名稱")
+    document_content: str = Field(..., description="文件內容（包含新聞列表）")
+    recipient_email: str = Field(..., description="收件人郵箱地址")
+    subject: Optional[str] = Field(default="東南亞新聞輿情報告", description="郵件主旨")
+
+
+@app.post("/api/export-news")
+async def export_and_send_news(req: ExportNewsRequest):
+    """
+    從文件內容中解析新聞列表，匯出到 Excel 並發送郵件
+    """
+    try:
+        if not req.document_content:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "文件內容為空"}
+            )
+        
+        if not req.recipient_email:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "未提供收件人郵箱地址"}
+            )
+        
+        # 使用絕對路徑確保檔案位置正確
+        base_dir = Path(__file__).parent
+        output_dir = base_dir / "exports"
+        output_dir.mkdir(exist_ok=True)
+        
+        print(f"📁 輸出目錄: {output_dir}")
+        print(f"📄 文件名稱: {req.document_name}")
+        print(f"📝 內容長度: {len(req.document_content)} 字元")
+        
+        # 生成 Excel 檔案（傳入文件內容進行解析）
+        excel_result = generate_news_excel(
+            document_name=req.document_name,
+            document_content=req.document_content,
+            output_dir=str(output_dir)
+        )
+        
+        if not excel_result.get("success"):
+            print(f"❌ Excel 生成失敗: {excel_result.get('error')}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": excel_result.get("error", "生成 Excel 失敗")}
+            )
+        
+        filepath = excel_result["filepath"]
+        filename = excel_result["filename"]
+        news_items = excel_result.get("news_items", [])
+        
+        print(f"✅ Excel 已生成: {filepath}")
+        print(f"📊 新聞數量: {len(news_items)}")
+        print(f"📂 檔案存在: {os.path.exists(filepath)}")
+        print(f"📦 檔案大小: {os.path.getsize(filepath) if os.path.exists(filepath) else 0} bytes")
+        
+        # 生成郵件內容
+        email_body = generate_news_report_html(
+            document_name=req.document_name,
+            news_items=news_items
+        )
+        
+        print(f"📧 準備發送郵件至: {req.recipient_email}")
+        print(f"📎 附件路徑: {filepath}")
+        print(f"📎 附件名稱: {filename}")
+        
+        # 發送郵件
+        email_result = send_email_with_attachment(
+            to_email=req.recipient_email,
+            subject=req.subject,
+            body=email_body,
+            attachment_path=filepath,
+            attachment_name=filename
+        )
+        
+        print(f"📬 郵件發送結果: {email_result}")
+        
+        # 清理舊檔案（保留 7 天）
+        cleanup_old_exports(output_dir=str(output_dir), max_age_days=7)
+        
+        if email_result.get("success"):
+            return JSONResponse(
+                content={
+                    "success": True,
+                    "message": f"已成功匯出 {excel_result['count']} 筆新聞並發送至 {req.recipient_email}",
+                    "filename": filename,
+                    "count": excel_result["count"]
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "error": email_result.get("error", "發送郵件失敗"),
+                    "excel_generated": True,
+                    "filepath": filepath
+                }
+            )
+    
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": f"處理過程中發生錯誤: {str(e)}"}
+        )

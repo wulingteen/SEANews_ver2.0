@@ -52,53 +52,7 @@ const estimatePages = (content) => {
   return Math.max(1, Math.ceil(chars / 3000));
 };
 
-const initialDocs = [
-  {
-    id: 'doc-1',
-    name: '2024 Q2 財務報表',
-    type: 'TXT',
-    pages: estimatePages(q2Financials),
-    tag_key: 'doc-1',
-    tags: ['摘要', '納入報告'],
-    content: q2Financials,
-  },
-  {
-    id: 'doc-2',
-    name: '授信條款書',
-    type: 'TXT',
-    pages: estimatePages(termSheet),
-    tag_key: 'doc-2',
-    tags: ['翻譯', '納入報告'],
-    content: termSheet,
-  },
-  {
-    id: 'doc-3',
-    name: 'KYC / AML 資料包',
-    type: 'TXT',
-    pages: estimatePages(kycAml),
-    tag_key: 'doc-3',
-    tags: ['摘要', '風險掃描'],
-    content: kycAml,
-  },
-  {
-    id: 'doc-4',
-    name: '擔保品估價報告',
-    type: 'TXT',
-    pages: estimatePages(appraisal),
-    tag_key: 'doc-4',
-    tags: ['翻譯'],
-    content: appraisal,
-  },
-  {
-    id: 'doc-5',
-    name: '產業展望 Q2',
-    type: 'TXT',
-    pages: estimatePages(industryOutlook),
-    tag_key: 'doc-5',
-    tags: ['背景'],
-    content: industryOutlook,
-  },
-];
+const initialDocs = [];
 
 
 const initialRoutingSteps = [];
@@ -202,6 +156,10 @@ const normalizeRiskLevel = (level = '') => {
 export default function App() {
   const [documents, setDocuments] = useState(initialDocs);
   const [selectedDocId, setSelectedDocId] = useState(initialDocs[0]?.id || '');
+  const [currentDocForExport, setCurrentDocForExport] = useState(null); // 要匯出的文件
+  const [showExportModal, setShowExportModal] = useState(false); // 匯出對話框
+  const [recipientEmail, setRecipientEmail] = useState(''); // 收件人郵箱
+  const [isExporting, setIsExporting] = useState(false); // 匯出中
   const [editingDocId, setEditingDocId] = useState(''); // For tag editing
   const [customTags, setCustomTags] = useState([]); // User-created tags
   const [newTagInput, setNewTagInput] = useState('');
@@ -232,6 +190,27 @@ export default function App() {
   });
 
   const [activeTranslationIndex, setActiveTranslationIndex] = useState(0);
+
+  // 從數據庫載入新聞記錄
+  useEffect(() => {
+    const loadNewsRecords = async () => {
+      try {
+        const response = await fetch(`${apiBase || ''}/api/news/records`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.documents && data.documents.length > 0) {
+            setDocuments(data.documents);
+            if (!selectedDocId) {
+              setSelectedDocId(data.documents[0]?.id || '');
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('載入新聞記錄失敗:', error);
+      }
+    };
+    loadNewsRecords();
+  }, []);
 
   const persistDocTags = async (tagKey, tags) => {
     if (!tagKey) return;
@@ -411,7 +390,7 @@ export default function App() {
   };
 
   // Tag management functions
-  const handleToggleTag = (docId, tag) => {
+  const handleToggleTag = async (docId, tag) => {
     setDocuments((prev) => {
       let updatedTags = null;
       let tagKey = '';
@@ -428,6 +407,12 @@ export default function App() {
       });
       if (updatedTags && tagKey) {
         persistDocTags(tagKey, updatedTags);
+        // 同時更新數據庫
+        fetch(`${apiBase || ''}/api/news/records/${docId}/tags`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedTags),
+        }).catch(err => console.warn('更新標籤失敗:', err));
       }
       return next;
     });
@@ -451,22 +436,37 @@ export default function App() {
     setEditingDocId((prev) => (prev === docId ? '' : docId));
   };
 
-  const handleDeleteDoc = (docId) => {
+  const handleDeleteDoc = async (docId) => {
     if (!docId) return;
     const docName = documents.find((doc) => doc.id === docId)?.name || '文件';
     if (!window.confirm(`確定要刪除「${docName}」嗎？`)) return;
 
-    setDocuments((prev) => {
-      const next = prev.filter((doc) => doc.id !== docId);
-      // Update selection if the current one was removed
-      if (selectedDocId === docId) {
-        setSelectedDocId(next[0]?.id || '');
+    try {
+      // 從數據庫刪除
+      const response = await fetch(`${apiBase || ''}/api/news/records/${docId}`, {
+        method: 'DELETE',
+      });
+      
+      if (response.ok) {
+        // 從前端狀態中移除
+        setDocuments((prev) => {
+          const next = prev.filter((doc) => doc.id !== docId);
+          // Update selection if the current one was removed
+          if (selectedDocId === docId) {
+            setSelectedDocId(next[0]?.id || '');
+          }
+          if (editingDocId === docId) {
+            setEditingDocId('');
+          }
+          return next;
+        });
+      } else {
+        alert('刪除失敗');
       }
-      if (editingDocId === docId) {
-        setEditingDocId('');
-      }
-      return next;
-    });
+    } catch (error) {
+      console.error('刪除記錄失敗:', error);
+      alert('刪除時發生錯誤');
+    }
   };
 
   const handleUploadFiles = async (event) => {
@@ -578,6 +578,58 @@ export default function App() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  // 開啟匯出對話框
+  const handleOpenExportModal = (doc) => {
+    setCurrentDocForExport(doc);
+    setShowExportModal(true);
+  };
+
+  // 匯出並發送郵件
+  const handleExportAndSend = async () => {
+    if (!currentDocForExport) {
+      setErrorMessage('未選擇文件');
+      return;
+    }
+
+    if (!recipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+      setErrorMessage('請輸入有效的郵箱地址');
+      return;
+    }
+
+    setIsExporting(true);
+    setErrorMessage('');
+
+    try {
+      const response = await fetch(`${apiBase || ''}/api/export-news`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          document_id: currentDocForExport.id,
+          document_name: currentDocForExport.name,
+          document_content: currentDocForExport.content || '',
+          recipient_email: recipientEmail,
+          subject: '東南亞新聞輿情報告',
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        setShowExportModal(false);
+        setRecipientEmail('');
+        setCurrentDocForExport(null);
+        alert(`✅ 已成功將 ${result.count} 筆新聞匯出並發送至 ${recipientEmail}`);
+      } else {
+        setErrorMessage(result.error || '匯出失敗');
+      }
+    } catch (error) {
+      console.error('匯出錯誤:', error);
+      setErrorMessage('匯出過程中發生錯誤，請稍後再試');
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const handleSend = async () => {
@@ -975,10 +1027,10 @@ export default function App() {
             <div className="panel-header">
               <div>
                 <Text as="h2" weight="600" className="panel-title">
-                  文件集
+                  新聞集
                 </Text>
               </div>
-              <div className="panel-actions">
+              <div className="panel-actions" style={{ gap: '8px' }}>
                 <Button icon={Upload} variant="outlined" onClick={handleUploadClick}>
                   上傳文件
                 </Button>
@@ -1008,6 +1060,17 @@ export default function App() {
                         <div className="doc-card-row">
                           <div className="doc-title">{doc.name}</div>
                           <Tag size="small" color="blue">{doc.type}</Tag>
+                          {doc.type === 'RESEARCH' && doc.content && (
+                            <ActionIcon
+                              icon={Download}
+                              size="small"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenExportModal(doc);
+                              }}
+                              title="匯出 Excel 並寄送"
+                            />
+                          )}
                           <ActionIcon
                             icon={isEditing ? X : Edit3}
                             size="small"
@@ -1400,6 +1463,81 @@ export default function App() {
           </section>
         </div>
       </div>
+      {/* 匯出彈窗 */}
+      {showExportModal && (
+        <div 
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000
+          }}
+          onClick={() => setShowExportModal(false)}
+        >
+          <div 
+            style={{
+              backgroundColor: 'white',
+              borderRadius: '8px',
+              padding: '24px',
+              minWidth: '400px',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Text as="h3" weight="600" style={{ marginBottom: '16px' }}>
+              匯出並寄送新聞報告
+            </Text>
+            {currentDocForExport && (
+              <Text size="small" style={{ color: '#6c757d', marginBottom: '16px' }}>
+                文件：{currentDocForExport.name}
+              </Text>
+            )}
+            <div style={{ marginBottom: '16px' }}>
+              <Text size="small" weight="500" style={{ marginBottom: '8px', display: 'block' }}>
+                收件人郵箱
+              </Text>
+              <input
+                type="email"
+                value={recipientEmail}
+                onChange={(e) => setRecipientEmail(e.target.value)}
+                placeholder="請輸入收件人郵箱地址"
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid #d9d9d9',
+                  borderRadius: '4px',
+                  fontSize: '14px'
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <Button
+                variant="outlined"
+                onClick={() => {
+                  setShowExportModal(false);
+                  setRecipientEmail('');
+                }}
+                disabled={isExporting}
+              >
+                取消
+              </Button>
+              <Button
+                type="primary"
+                onClick={handleExportAndSend}
+                disabled={isExporting || !recipientEmail.trim()}
+              >
+                {isExporting ? '處理中...' : '寄送'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </ThemeProvider>
   );
 }

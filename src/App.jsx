@@ -52,53 +52,7 @@ const estimatePages = (content) => {
   return Math.max(1, Math.ceil(chars / 3000));
 };
 
-const initialDocs = [
-  {
-    id: 'doc-1',
-    name: '2024 Q2 財務報表',
-    type: 'TXT',
-    pages: estimatePages(q2Financials),
-    tag_key: 'doc-1',
-    tags: ['摘要', '納入報告'],
-    content: q2Financials,
-  },
-  {
-    id: 'doc-2',
-    name: '授信條款書',
-    type: 'TXT',
-    pages: estimatePages(termSheet),
-    tag_key: 'doc-2',
-    tags: ['翻譯', '納入報告'],
-    content: termSheet,
-  },
-  {
-    id: 'doc-3',
-    name: 'KYC / AML 資料包',
-    type: 'TXT',
-    pages: estimatePages(kycAml),
-    tag_key: 'doc-3',
-    tags: ['摘要', '風險掃描'],
-    content: kycAml,
-  },
-  {
-    id: 'doc-4',
-    name: '擔保品估價報告',
-    type: 'TXT',
-    pages: estimatePages(appraisal),
-    tag_key: 'doc-4',
-    tags: ['翻譯'],
-    content: appraisal,
-  },
-  {
-    id: 'doc-5',
-    name: '產業展望 Q2',
-    type: 'TXT',
-    pages: estimatePages(industryOutlook),
-    tag_key: 'doc-5',
-    tags: ['背景'],
-    content: industryOutlook,
-  },
-];
+const initialDocs = [];
 
 
 const initialRoutingSteps = [];
@@ -236,6 +190,27 @@ export default function App() {
   });
 
   const [activeTranslationIndex, setActiveTranslationIndex] = useState(0);
+
+  // 從數據庫載入新聞記錄
+  useEffect(() => {
+    const loadNewsRecords = async () => {
+      try {
+        const response = await fetch(`${apiBase || ''}/api/news/records`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.documents && data.documents.length > 0) {
+            setDocuments(data.documents);
+            if (!selectedDocId) {
+              setSelectedDocId(data.documents[0]?.id || '');
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('載入新聞記錄失敗:', error);
+      }
+    };
+    loadNewsRecords();
+  }, []);
 
   const persistDocTags = async (tagKey, tags) => {
     if (!tagKey) return;
@@ -415,7 +390,7 @@ export default function App() {
   };
 
   // Tag management functions
-  const handleToggleTag = (docId, tag) => {
+  const handleToggleTag = async (docId, tag) => {
     setDocuments((prev) => {
       let updatedTags = null;
       let tagKey = '';
@@ -432,6 +407,12 @@ export default function App() {
       });
       if (updatedTags && tagKey) {
         persistDocTags(tagKey, updatedTags);
+        // 同時更新數據庫
+        fetch(`${apiBase || ''}/api/news/records/${docId}/tags`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedTags),
+        }).catch(err => console.warn('更新標籤失敗:', err));
       }
       return next;
     });
@@ -455,22 +436,37 @@ export default function App() {
     setEditingDocId((prev) => (prev === docId ? '' : docId));
   };
 
-  const handleDeleteDoc = (docId) => {
+  const handleDeleteDoc = async (docId) => {
     if (!docId) return;
     const docName = documents.find((doc) => doc.id === docId)?.name || '文件';
     if (!window.confirm(`確定要刪除「${docName}」嗎？`)) return;
 
-    setDocuments((prev) => {
-      const next = prev.filter((doc) => doc.id !== docId);
-      // Update selection if the current one was removed
-      if (selectedDocId === docId) {
-        setSelectedDocId(next[0]?.id || '');
+    try {
+      // 從數據庫刪除
+      const response = await fetch(`${apiBase || ''}/api/news/records/${docId}`, {
+        method: 'DELETE',
+      });
+      
+      if (response.ok) {
+        // 從前端狀態中移除
+        setDocuments((prev) => {
+          const next = prev.filter((doc) => doc.id !== docId);
+          // Update selection if the current one was removed
+          if (selectedDocId === docId) {
+            setSelectedDocId(next[0]?.id || '');
+          }
+          if (editingDocId === docId) {
+            setEditingDocId('');
+          }
+          return next;
+        });
+      } else {
+        alert('刪除失敗');
       }
-      if (editingDocId === docId) {
-        setEditingDocId('');
-      }
-      return next;
-    });
+    } catch (error) {
+      console.error('刪除記錄失敗:', error);
+      alert('刪除時發生錯誤');
+    }
   };
 
   const handleUploadFiles = async (event) => {

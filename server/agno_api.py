@@ -26,6 +26,7 @@ from rag_store import RagStore
 from tag_store import get_doc_tags, load_tag_store, set_custom_tags, set_doc_tags
 from email_service import send_email_with_attachment, generate_news_report_html
 from excel_service import generate_news_excel, cleanup_old_exports
+from news_store import news_store
 
 
 # Robust .env loader to avoid parser crashes on some environments.
@@ -511,7 +512,8 @@ def build_research_document(
 
     rag_store.index_inline_text(doc_id, name, combined, "RESEARCH")
 
-    return {
+    # 創建文件記錄
+    document_record = {
         "id": doc_id,
         "name": name,
         "type": "RESEARCH",
@@ -521,7 +523,13 @@ def build_research_document(
         "preview": combined[:400],
         "content": combined,
         "source": "research",
+        "tags": []
     }
+    
+    # 保存到數據庫
+    news_store.add_record(document_record)
+    
+    return document_record
 
 
 def build_smalltalk_agent(
@@ -1603,4 +1611,82 @@ async def export_and_send_news(req: ExportNewsRequest):
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": f"處理過程中發生錯誤: {str(e)}"}
+        )
+
+
+@app.get("/api/news/records")
+async def get_news_records():
+    """
+    獲取所有新聞記錄
+    """
+    try:
+        records = news_store.get_all_records()
+        return JSONResponse(content={"documents": records})
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"獲取新聞記錄失敗: {str(e)}"}
+        )
+
+
+@app.delete("/api/news/records/{record_id}")
+async def delete_news_record(record_id: str):
+    """
+    刪除指定的新聞記錄
+    """
+    try:
+        success = news_store.delete_record(record_id)
+        if success:
+            return JSONResponse(content={"success": True, "message": "記錄已刪除"})
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"success": False, "error": "記錄不存在"}
+            )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": f"刪除記錄失敗: {str(e)}"}
+        )
+
+
+@app.put("/api/news/records/{record_id}/tags")
+async def update_news_record_tags(record_id: str, tags: List[str]):
+    """
+    更新新聞記錄的標籤
+    """
+    try:
+        success = news_store.update_tags(record_id, tags)
+        if success:
+            return JSONResponse(content={"success": True, "message": "標籤已更新"})
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"success": False, "error": "記錄不存在"}
+            )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": f"更新標籤失敗: {str(e)}"}
+        )
+
+
+@app.post("/api/news/records")
+async def save_news_record(record: Dict[str, Any]):
+    """
+    保存新聞記錄到數據庫
+    """
+    try:
+        success = news_store.add_record(record)
+        if success:
+            return JSONResponse(content={"success": True, "message": "記錄已保存"})
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "保存失敗"}
+            )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": f"保存記錄失敗: {str(e)}"}
         )

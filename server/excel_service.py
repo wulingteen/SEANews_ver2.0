@@ -14,7 +14,7 @@ from openpyxl.utils import get_column_letter
 def parse_news_from_content(content: str) -> List[Dict[str, str]]:
     """
     從文件內容中解析新聞列表
-    預期格式：Markdown 格式，包含新聞標題、時間、摘要、連結等資訊
+    預期格式：Markdown 格式，標題為 ###，後接發布時間、摘要和 URL（用反引號包裹）
     
     Args:
         content: 文件內容（Markdown 格式）
@@ -24,89 +24,94 @@ def parse_news_from_content(content: str) -> List[Dict[str, str]]:
     """
     news_items = []
     
-    # 嘗試多種解析策略
-    # 策略 1: 按連結分割（每個新聞通常有一個 URL）
-    url_pattern = r'(https?://[^\s\)]+)'
-    parts = re.split(url_pattern, content)
+    # 先移除文末的總結區塊（通常以 "## 摘要" 或 "## 期間重點" 等開頭）
+    # 這些區塊會干擾最後一則新聞的摘要提取
+    summary_section_pattern = r'\n##\s+(摘要|期間重點|覆蓋度|缺口|後續建議|Credit Memo).*$'
+    content = re.sub(summary_section_pattern, '', content, flags=re.DOTALL)
     
-    current_news = {}
-    for i, part in enumerate(parts):
-        part = part.strip()
-        if not part:
+    # 按 ### 標題分割新聞項目
+    sections = re.split(r'\n###\s+', content)
+    
+    for section in sections:
+        section = section.strip()
+        if not section or len(section) < 20:
             continue
         
-        # 如果是 URL
-        if re.match(url_pattern, part):
-            if current_news.get('title'):
-                current_news['link'] = part
-                news_items.append(current_news)
-                current_news = {}
+        # 跳過非新聞標題（如 "回覆重點"、"越南（Vietnam）" 等國家標題）
+        first_line = section.split('\n')[0].strip()
+        if any(keyword in first_line for keyword in ['回覆重點', '越南', '泰國', '印尼', '菲律賓', '柬埔寨', 'Vietnam', 'Thailand', 'Indonesia', 'Philippines', 'Cambodia']):
+            continue
+        if first_line.startswith('#') or first_line.startswith('【'):
+            continue
+        
+        news_item = {
+            'title': '',
+            'date': '',
+            'summary': '',
+            'link': ''
+        }
+        
+        # 提取標題（第一行）
+        lines = section.split('\n')
+        if lines:
+            news_item['title'] = lines[0].strip()
+        
+        # 提取發布時間（格式：發布時間：YYYY-MM-DD 或其他日期格式）
+        date_pattern = r'發布時間[：:]\s*(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日]?)'
+        date_match = re.search(date_pattern, section)
+        if date_match:
+            news_item['date'] = date_match.group(1).replace('年', '-').replace('月', '-').replace('日', '')
+        
+        # 提取連結（用反引號包裹的 URL，格式：`https://...`）
+        link_pattern = r'`(https?://[^`]+)`'
+        link_match = re.search(link_pattern, section)
+        if link_match:
+            news_item['link'] = link_match.group(1).strip()
         else:
-            # 提取標題（通常是 ### 或 ** 包圍）
-            title_match = re.search(r'###?\s+(.+?)(?:\n|$)', part) or \
-                         re.search(r'\*\*(.+?)\*\*', part)
-            
-            if title_match and not current_news.get('title'):
-                current_news['title'] = title_match.group(1).strip()
-                
-                # 提取日期
-                date_match = re.search(r'(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日]?)', part)
-                if date_match:
-                    current_news['date'] = date_match.group(1)
-                else:
-                    current_news['date'] = ''
-                
-                # 提取摘要（移除標題和日期後的文字）
-                summary_text = part
-                if title_match:
-                    summary_text = summary_text.replace(title_match.group(0), '')
-                if date_match:
-                    summary_text = summary_text.replace(date_match.group(0), '')
-                
-                # 清理 Markdown 格式
-                summary_text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', summary_text)
-                summary_text = re.sub(r'\*\*([^\*]+)\*\*', r'\1', summary_text)
-                summary_text = re.sub(r'\*([^\*]+)\*', r'\1', summary_text)
-                summary_text = re.sub(r'#+\s*', '', summary_text)
-                summary_text = summary_text.strip()
-                
-                current_news['summary'] = summary_text[:500]  # 限制長度
-                current_news['link'] = ''  # 待後續填入
-    
-    # 保存最後一個（如果沒有連結）
-    if current_news.get('title') and current_news not in news_items:
-        news_items.append(current_news)
-    
-    # 如果第一種策略失敗，嘗試簡單按段落分割
-    if not news_items:
-        sections = content.split('\n\n')
-        for section in sections:
-            section = section.strip()
-            if not section or len(section) < 20:
-                continue
-            
-            title_match = re.search(r'###?\s+(.+?)(?:\n|$)', section) or \
-                         re.search(r'\*\*(.+?)\*\*', section)
-            
-            if title_match:
-                news_item = {
-                    'title': title_match.group(1).strip(),
-                    'date': '',
-                    'summary': section[:300],
-                    'link': ''
-                }
-                
-                # 提取日期
-                date_match = re.search(r'(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日]?)', section)
-                if date_match:
-                    news_item['date'] = date_match.group(1)
-                
-                # 提取連結
-                link_match = re.search(r'(https?://[^\s\)]+)', section)
-                if link_match:
-                    news_item['link'] = link_match.group(1)
-                
-                news_items.append(news_item)
+            # 嘗試提取未用反引號包裹的 URL
+            plain_link_match = re.search(r'(https?://[^\s\)]+)', section)
+            if plain_link_match:
+                news_item['link'] = plain_link_match.group(1).strip()
+        
+        # 提取摘要（移除標題、日期、URL 後的文字）
+        summary_text = section
+        
+        # 移除標題行
+        if lines:
+            summary_text = '\n'.join(lines[1:])
+        
+        # 移除發布時間行
+        summary_text = re.sub(r'發布時間[：:][^\n]+', '', summary_text)
+        
+        # 移除分隔線和後續的國家標題（如 "---\n## 泰國"）
+        summary_text = re.sub(r'---+.*$', '', summary_text, flags=re.DOTALL)
+        
+        # 移除 Markdown 連結格式（如 [text](url)，包括不完整的）
+        summary_text = re.sub(r'\[([^\]]*)\]\([^\)]*\)', r'\1', summary_text)
+        # 移除殘留的不完整連結格式
+        summary_text = re.sub(r'\([^\)]*https?://[^\)]*\)', '', summary_text)
+        summary_text = re.sub(r'\[[^\]]*\]', '', summary_text)
+        
+        # 移除 URL（包括反引號包裹的和普通的）
+        summary_text = re.sub(r'`https?://[^`]+`', '', summary_text)
+        summary_text = re.sub(r'https?://[^\s]+', '', summary_text)
+        
+        # 移除 Markdown 標題符號
+        summary_text = re.sub(r'#+\s*', '', summary_text)
+        
+        # 清理多餘的括號
+        summary_text = re.sub(r'\(\s*\)', '', summary_text)
+        
+        # 清理多餘空白和換行
+        summary_text = re.sub(r'\n+', ' ', summary_text)
+        summary_text = re.sub(r'\s+', ' ', summary_text)
+        summary_text = summary_text.strip()
+        
+        news_item['summary'] = summary_text[:500] if summary_text else ''
+        
+        # 只有標題和摘要都存在時才加入列表
+        if news_item['title'] and news_item['summary']:
+            news_items.append(news_item)
     
     return news_items
 

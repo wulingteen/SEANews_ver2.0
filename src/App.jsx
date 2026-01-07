@@ -107,13 +107,6 @@ const emptyTranslation = {
   clauses: initialTranslationPairs,
 };
 
-const artifactTabs = [
-  { id: 'documents', label: '文件', icon: FolderOpen },
-  { id: 'summary', label: '摘要', icon: FileText },
-  { id: 'translation', label: '翻譯', icon: Languages },
-  { id: 'memo', label: 'Credit Memo', icon: ClipboardCheck },
-];
-
 // 預設標籤分類
 const workflowTags = ['待處理', '處理中', '已完成', '需補件', '已歸檔'];
 const functionTags = ['摘要', '翻譯', '納入報告', '風險掃描', '背景資料'];
@@ -639,7 +632,7 @@ export default function App() {
     const userMessage = {
       id: createId(),
       role: 'user',
-      name: 'RM',
+      name: 'User',
       time: nowTime(),
       content: trimmed,
     };
@@ -1004,22 +997,11 @@ export default function App() {
             </div>
             <div>
               <Text as="h1" weight="700" className="brand-title">
-                Credit Memo 工作台
-              </Text>
-              <Text type="secondary" className="brand-subtitle">
-                企業金融 RM 授信報告工作流程
+                新聞輿情系統
               </Text>
             </div>
           </div>
 
-          <div className="header-actions">
-            <Button variant="outlined" icon={Briefcase} onClick={handleNewCase}>
-              新增案件
-            </Button>
-            <Button type="primary" icon={FolderPlus} onClick={handleExportPackage}>
-              匯出資料包
-            </Button>
-          </div>
         </header>
 
         <div className="artifact-shell">
@@ -1030,19 +1012,7 @@ export default function App() {
                   新聞集
                 </Text>
               </div>
-              <div className="panel-actions" style={{ gap: '8px' }}>
-                <Button icon={Upload} variant="outlined" onClick={handleUploadClick}>
-                  上傳文件
-                </Button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  className="file-input"
-                  accept=".pdf,.txt,.md,.csv,.png,.jpg,.jpeg,.webp,.gif"
-                  onChange={handleUploadFiles}
-                />
-              </div>
+              
             </div>
 
             <div className="doc-tray">
@@ -1197,9 +1167,7 @@ export default function App() {
                     );
                   })}
                 </div>
-              ) : (
-                <div className="doc-empty">尚未上傳文件，支援 PDF / TXT</div>
-              )}
+              ) : null}
             </div>
 
           </section>
@@ -1217,22 +1185,7 @@ export default function App() {
                     匯出報告
                   </Button>
                 ) : null}
-                <ActionIcon icon={Download} variant="outlined" onClick={handleDownloadOutput} title="下載 Markdown" />
               </div>
-            </div>
-
-            <div className="tab-bar">
-              {artifactTabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  className={`tab-button${activeTab === tab.id ? ' is-active' : ''}`}
-                  onClick={() => setActiveTab(tab.id)}
-                >
-                  <Icon icon={tab.icon} size="small" />
-                  <span>{tab.label}</span>
-                </button>
-              ))}
             </div>
 
             <div className="artifact-stack">
@@ -1358,16 +1311,14 @@ export default function App() {
             <div className="panel-header">
               <div>
                 <Text as="h2" weight="600" className="panel-title">
-                  RM 對話
+                  新聞檢索
                 </Text>
               </div>
               <div className="panel-actions">
                 <Tag size="small" variant="borderless">
                   案件: {caseId}
                 </Tag>
-                <Tag size="small" variant="borderless">
-                  SLA: {calculateSlaRemaining(caseStartTime, slaMinutes)}
-                </Tag>
+                
               </div>
             </div>
 
@@ -1381,7 +1332,7 @@ export default function App() {
                   style={{ '--delay': `${index * 120}ms` }}
                 >
                   <div className="message-avatar">
-                    {message.role === 'user' ? 'RM' : 'AI'}
+                    {message.role === 'user' ? 'User' : 'AI'}
                   </div>
                   <div className="message-bubble">
                     <div className="message-meta">
@@ -1448,13 +1399,11 @@ export default function App() {
                     handleSend();
                   }
                 }}
-                placeholder="輸入指示，例如：請翻譯條款書第 3-6 條，並更新風險摘要"
+                placeholder="輸入問題，例如：最近有哪些關於越南的經濟新聞？"
               />
               {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
               <div className="composer-actions">
-                <Button icon={Paperclip} variant="outlined" onClick={handleUploadClick}>
-                  上傳文件
-                </Button>
+                
                 <Button icon={ArrowUpRight} type="primary" onClick={handleSend} disabled={isLoading}>
                   {isLoading ? '產生中...' : '送出指示'}
                 </Button>

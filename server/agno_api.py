@@ -475,6 +475,64 @@ def estimate_pages(content: str) -> int:
     return max(1, (len(content) + 2999) // 3000)
 
 
+def parse_news_articles(content: str) -> List[Dict[str, str]]:
+    """解析新聞內容，返回獨立新聞列表"""
+    import re
+    
+    articles = []
+    # 使用 ### 作為新聞分隔符
+    sections = re.split(r'\n###\s+', content)
+    
+    for section in sections:
+        if not section.strip():
+            continue
+            
+        lines = section.strip().split('\n')
+        if len(lines) < 2:
+            continue
+            
+        title = lines[0].strip()
+        article_content = '\n'.join(lines[1:]).strip()
+        
+        # 過濾掉系統信息：檢查標題是否包含系統相關關鍵詞
+        system_keywords = ['案件', 'CASE', '會話', '檢索', 'ID', '編號', '系統', '助理', '我是', '我可以']
+        if any(keyword in title for keyword in system_keywords):
+            continue
+        
+        # 提取發布時間
+        publish_date = ""
+        date_match = re.search(r'發布時間[：:]\s*(\d{4}[-年]\d{1,2}[-月]\d{1,2}日?)', article_content)
+        if date_match:
+            publish_date = date_match.group(1)
+        
+        # 提取 URL
+        url = ""
+        url_match = re.search(r'https?://[^\s\)]+', article_content)
+        if url_match:
+            url = url_match.group(0)
+        
+        # 驗證是否為有效新聞：必須有 URL 或發布時間
+        if not url and not publish_date:
+            continue
+        
+        # 驗證標題長度（太短或太長都可能不是新聞標題）
+        if len(title) < 5 or len(title) > 200:
+            continue
+        
+        # 驗證內容長度（太短可能不是完整新聞）
+        if len(article_content) < 30:
+            continue
+        
+        articles.append({
+            'title': title,
+            'content': article_content,
+            'publish_date': publish_date,
+            'url': url
+        })
+    
+    return articles
+
+
 def build_research_document(
     data: Dict[str, Any],
     last_user: str,
@@ -530,6 +588,66 @@ def build_research_document(
     news_store.add_record(document_record)
     
     return document_record
+
+
+def build_news_documents(
+    data: Dict[str, Any],
+    last_user: str,
+    use_web_search: bool,
+) -> List[Dict[str, Any]]:
+    """將搜尋結果拆分成獨立的新聞文檔"""
+    if not use_web_search:
+        return []
+    
+    assistant_content = (data.get("assistant") or {}).get("content") or ""
+    if not assistant_content:
+        return []
+    
+    # 解析新聞列表
+    articles = parse_news_articles(assistant_content)
+    if not articles:
+        return []
+    
+    documents = []
+    for article in articles:
+        doc_id = str(uuid.uuid4())
+        title = article['title']
+        content = article['content']
+        publish_date = article['publish_date']
+        url = article['url']
+        
+        # 組合完整內容
+        full_content = f"# {title}\n\n"
+        if publish_date:
+            full_content += f"**發布時間**: {publish_date}\n\n"
+        full_content += content
+        if url:
+            full_content += f"\n\n**來源**: {url}"
+        
+        # 索引到 RAG
+        rag_store.index_inline_text(doc_id, title, full_content, "NEWS")
+        
+        # 創建文件記錄
+        document_record = {
+            "id": doc_id,
+            "name": title,
+            "type": "NEWS",
+            "pages": estimate_pages(full_content),
+            "status": "indexed",
+            "message": "",
+            "preview": content[:300],
+            "content": full_content,
+            "source": "news",
+            "tags": [],
+            "publish_date": publish_date,
+            "url": url
+        }
+        
+        # 保存到數據庫
+        news_store.add_record(document_record)
+        documents.append(document_record)
+    
+    return documents
 
 
 def build_smalltalk_agent(
@@ -1430,13 +1548,13 @@ async def generate_artifacts(req: ArtifactRequest):
                         reasoning_summary = build_reasoning_summary(reasoning_fragments)
                         if reasoning_summary:
                             final_data["reasoning_summary"] = reasoning_summary
-                        research_doc = build_research_document(
+                        news_docs = build_news_documents(
                             final_data,
                             last_user,
                             use_web_search,
                         )
-                        if research_doc:
-                            final_data["documents_append"] = [research_doc]
+                        if news_docs:
+                            final_data["documents_append"] = news_docs
                         yield f"data: {json.dumps(final_data)}\n\n"
                     else:
                         # No content accumulated, send fallback response
@@ -1493,9 +1611,9 @@ async def generate_artifacts(req: ArtifactRequest):
                 data["reasoning_summary"] = truncate_text(reasoning_summary, TRACE_MAX_LEN)
             if ocr_updates:
                 data["documents_update"] = ocr_updates
-            research_doc = build_research_document(data, last_user, use_web_search)
-            if research_doc:
-                data["documents_append"] = [research_doc]
+            news_docs = build_news_documents(data, last_user, use_web_search)
+            if news_docs:
+                data["documents_append"] = news_docs
             return data
     except Exception as exc:  # noqa: BLE001
         return {

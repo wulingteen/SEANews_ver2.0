@@ -797,7 +797,7 @@ export default function App() {
         const appendedDocs = data.documents_append.map((doc) => ({
           id: doc.id || createId(),
           name: doc.name || '未命名',
-          type: doc.type || 'RESEARCH',
+          type: doc.type || 'NEWS',
           pages: doc.pages ?? '-',
           tags: Array.isArray(doc.tags) ? doc.tags : [],
           content: doc.content || doc.preview || '',
@@ -806,7 +806,9 @@ export default function App() {
           tag_key: doc.tag_key || doc.id,
           status: doc.status || 'indexed',
           message: doc.message || '',
-          source: doc.source || 'research',
+          source: doc.source || 'news',
+          publish_date: doc.publish_date || '',
+          url: doc.url || '',
         }));
 
         setDocuments((prev) => {
@@ -1030,7 +1032,7 @@ export default function App() {
                         <div className="doc-card-row">
                           <div className="doc-title">{doc.name}</div>
                           <Tag size="small" color="blue">{doc.type}</Tag>
-                          {doc.type === 'RESEARCH' && doc.content && (
+                          {(doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content && (
                             <ActionIcon
                               icon={Download}
                               size="small"

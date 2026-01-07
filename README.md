@@ -1,10 +1,10 @@
-# LobeChat Claude Artifacts Screen
+# SEA News Alert - 東南亞新聞輿情系統
 
-以 LobeHub UI 建立的企業金融 RM 授信原型，模擬指派摘要/翻譯並將產出整理成 Artifacts 分頁，後端改為 Agno（Python Agent）調用。
+以 LobeHub UI 建立的東南亞新聞輿情監控系統，透過 Agno（Python Agent）進行新聞搜尋、摘要與分析。
 
 ## 特色
 - Claude Artifacts 風格：暖色編輯系雙欄，左側對話/路由，右側輸出 + Live Preview。
-- 真實串接：送出指令會打 OpenAI，回填摘要/翻譯/授信報告分頁與任務路由。
+- 真實串接：送出指令會打 OpenAI，進行新聞搜尋與摘要分析。
 - Markdown 預覽：右側 Live Preview 直接渲染模型輸出的 Markdown，預設不填示意值，送出指令後才生成。
 - Agent Team + RAG：對話直接溝通 Team，指派 RAG Agent 解析 PDF 並檢索相關段落。
 - 文件工作流：可上傳 PDF/TXT，指派摘要/翻譯，生成授信草稿。

@@ -25,7 +25,7 @@ from agno.models.openai.responses import OpenAIResponses
 from rag_store import RagStore
 from tag_store import get_doc_tags, load_tag_store, set_custom_tags, set_doc_tags
 from email_service import send_email_with_attachment, generate_news_report_html
-from excel_service import generate_news_excel, cleanup_old_exports
+from excel_service import generate_news_excel, generate_batch_news_excel, cleanup_old_exports
 from news_store import news_store
 
 
@@ -475,6 +475,64 @@ def estimate_pages(content: str) -> int:
     return max(1, (len(content) + 2999) // 3000)
 
 
+def parse_news_articles(content: str) -> List[Dict[str, str]]:
+    """解析新聞內容，返回獨立新聞列表"""
+    import re
+    
+    articles = []
+    # 使用 ### 作為新聞分隔符
+    sections = re.split(r'\n###\s+', content)
+    
+    for section in sections:
+        if not section.strip():
+            continue
+            
+        lines = section.strip().split('\n')
+        if len(lines) < 2:
+            continue
+            
+        title = lines[0].strip()
+        article_content = '\n'.join(lines[1:]).strip()
+        
+        # 過濾掉系統信息：檢查標題是否包含系統相關關鍵詞
+        system_keywords = ['案件', 'CASE', '會話', '檢索', 'ID', '編號', '系統', '助理', '我是', '我可以']
+        if any(keyword in title for keyword in system_keywords):
+            continue
+        
+        # 提取發布時間
+        publish_date = ""
+        date_match = re.search(r'發布時間[：:]\s*(\d{4}[-年]\d{1,2}[-月]\d{1,2}日?)', article_content)
+        if date_match:
+            publish_date = date_match.group(1)
+        
+        # 提取 URL
+        url = ""
+        url_match = re.search(r'https?://[^\s\)]+', article_content)
+        if url_match:
+            url = url_match.group(0)
+        
+        # 驗證是否為有效新聞：必須有 URL 或發布時間
+        if not url and not publish_date:
+            continue
+        
+        # 驗證標題長度（太短或太長都可能不是新聞標題）
+        if len(title) < 5 or len(title) > 200:
+            continue
+        
+        # 驗證內容長度（太短可能不是完整新聞）
+        if len(article_content) < 30:
+            continue
+        
+        articles.append({
+            'title': title,
+            'content': article_content,
+            'publish_date': publish_date,
+            'url': url
+        })
+    
+    return articles
+
+
 def build_research_document(
     data: Dict[str, Any],
     last_user: str,
@@ -530,6 +588,66 @@ def build_research_document(
     news_store.add_record(document_record)
     
     return document_record
+
+
+def build_news_documents(
+    data: Dict[str, Any],
+    last_user: str,
+    use_web_search: bool,
+) -> List[Dict[str, Any]]:
+    """將搜尋結果拆分成獨立的新聞文檔"""
+    if not use_web_search:
+        return []
+    
+    assistant_content = (data.get("assistant") or {}).get("content") or ""
+    if not assistant_content:
+        return []
+    
+    # 解析新聞列表
+    articles = parse_news_articles(assistant_content)
+    if not articles:
+        return []
+    
+    documents = []
+    for article in articles:
+        doc_id = str(uuid.uuid4())
+        title = article['title']
+        content = article['content']
+        publish_date = article['publish_date']
+        url = article['url']
+        
+        # 組合完整內容
+        full_content = f"# {title}\n\n"
+        if publish_date:
+            full_content += f"**發布時間**: {publish_date}\n\n"
+        full_content += content
+        if url:
+            full_content += f"\n\n**來源**: {url}"
+        
+        # 索引到 RAG
+        rag_store.index_inline_text(doc_id, title, full_content, "NEWS")
+        
+        # 創建文件記錄
+        document_record = {
+            "id": doc_id,
+            "name": title,
+            "type": "NEWS",
+            "pages": estimate_pages(full_content),
+            "status": "indexed",
+            "message": "",
+            "preview": content[:300],
+            "content": full_content,
+            "source": "news",
+            "tags": [],
+            "publish_date": publish_date,
+            "url": url
+        }
+        
+        # 保存到數據庫
+        news_store.add_record(document_record)
+        documents.append(document_record)
+    
+    return documents
 
 
 def build_smalltalk_agent(
@@ -711,7 +829,7 @@ def build_routing_update(event: Any, routing_state: Dict[str, str]) -> Optional[
     if event_name in {TeamRunEvent.run_completed.value, RunEvent.run_completed.value}:
         step_id = "run-main"
         routing_state.setdefault(step_id, step_id)
-        return {"id": step_id, "label": "模型生成", "status": "done", "eta": "完成"}
+        return {"id": step_id, "label": "模型生成", "status": "done", "eta": ""}
 
     if event_name in {TeamRunEvent.run_error.value, RunEvent.run_error.value}:
         step_id = "run-main"
@@ -743,7 +861,7 @@ def build_routing_update(event: Any, routing_state: Dict[str, str]) -> Optional[
             "id": routing_state[tool_key],
             "label": format_tool_label(getattr(tool, "tool_name", None)),
             "status": "done",
-            "eta": "完成",
+            "eta": "",
         }
 
     if event_name in {TeamRunEvent.tool_call_error.value, RunEvent.tool_call_error.value}:
@@ -1024,12 +1142,13 @@ def build_team(
     enable_vision: bool = False,
 ) -> Team:
     model = get_model(enable_web_search=enable_web_search, enable_vision=enable_vision)
-    rag_agent = build_rag_agent(doc_ids, get_model())
+    # RAG Agent 已停用以提升速度，如需啟用請取消下方註解
+    # rag_agent = build_rag_agent(doc_ids, get_model())
     research_agent = build_research_agent()
     vision_agent = build_vision_agent()
     return Team(
         name="東南亞新聞輿情分析助理",
-        members=[rag_agent, research_agent, vision_agent],
+        members=[research_agent, vision_agent],  # 移除 rag_agent
         model=model,
         instructions=TEAM_INSTRUCTIONS,
         expected_output=EXPECTED_OUTPUT,
@@ -1353,17 +1472,21 @@ async def generate_artifacts(req: ArtifactRequest):
                         if update_routing_log(routing_log, ocr_done):
                             yield f"data: {json.dumps({'routing_update': ocr_done})}\n\n"
 
-                    ensure_inline_documents_indexed(req.documents)
-                    doc_ids = [
-                        doc.id
-                        for doc in req.documents
-                        if doc.id and doc.id in rag_store.docs
-                    ]
+                    # RAG 索引已停用以提升速度，如需啟用請取消下方註解
+                    # ensure_inline_documents_indexed(req.documents)
+                    doc_ids = []
+                    # doc_ids = [
+                    #     doc.id
+                    #     for doc in req.documents
+                    #     if doc.id and doc.id in rag_store.docs
+                    # ]
+
                     team = build_team(
                         doc_ids,
                         enable_web_search=use_web_search,
                         enable_vision=use_vision,
                     )
+
                     if use_web_search:
                         team.tool_choice = WEB_SEARCH_TOOL
 
@@ -1384,8 +1507,8 @@ async def generate_artifacts(req: ArtifactRequest):
 
                     response = team.run(
                         prompt,
-                        dependencies={"doc_ids": doc_ids},
-                        add_dependencies_to_context=True,
+                        # dependencies={"doc_ids": doc_ids},  # RAG 已停用
+                        # add_dependencies_to_context=True,
                         images=image_inputs if image_inputs else None,
                         stream=True,
                         stream_events=True,
@@ -1430,13 +1553,13 @@ async def generate_artifacts(req: ArtifactRequest):
                         reasoning_summary = build_reasoning_summary(reasoning_fragments)
                         if reasoning_summary:
                             final_data["reasoning_summary"] = reasoning_summary
-                        research_doc = build_research_document(
+                        news_docs = build_news_documents(
                             final_data,
                             last_user,
                             use_web_search,
                         )
-                        if research_doc:
-                            final_data["documents_append"] = [research_doc]
+                        if news_docs:
+                            final_data["documents_append"] = news_docs
                         yield f"data: {json.dumps(final_data)}\n\n"
                     else:
                         # No content accumulated, send fallback response
@@ -1455,12 +1578,14 @@ async def generate_artifacts(req: ArtifactRequest):
         else:
             # Non-streaming response
             ocr_updates = run_ocr_for_documents(req.documents)
-            ensure_inline_documents_indexed(req.documents)
-            doc_ids = [
-                doc.id
-                for doc in req.documents
-                if doc.id and doc.id in rag_store.docs
-            ]
+            # RAG 索引已停用以提升速度，如需啟用請取消下方註解
+            # ensure_inline_documents_indexed(req.documents)
+            doc_ids = []
+            # doc_ids = [
+            #     doc.id
+            #     for doc in req.documents
+            #     if doc.id and doc.id in rag_store.docs
+            # ]
             team = build_team(
                 doc_ids,
                 enable_web_search=use_web_search,
@@ -1493,9 +1618,9 @@ async def generate_artifacts(req: ArtifactRequest):
                 data["reasoning_summary"] = truncate_text(reasoning_summary, TRACE_MAX_LEN)
             if ocr_updates:
                 data["documents_update"] = ocr_updates
-            research_doc = build_research_document(data, last_user, use_web_search)
-            if research_doc:
-                data["documents_append"] = [research_doc]
+            news_docs = build_news_documents(data, last_user, use_web_search)
+            if news_docs:
+                data["documents_append"] = news_docs
             return data
     except Exception as exc:  # noqa: BLE001
         return {
@@ -1626,6 +1751,115 @@ async def get_news_records():
         return JSONResponse(
             status_code=500,
             content={"error": f"獲取新聞記錄失敗: {str(e)}"}
+        )
+
+
+class BatchExportNewsRequest(BaseModel):
+    """批次匯出新聞請求"""
+    documents: List[Dict[str, str]] = Field(..., description="文件列表，每個包含 id, name, content")
+    recipient_email: str = Field(..., description="收件人郵箱地址")
+    subject: Optional[str] = Field(default="東南亞新聞輿情報告（批次匯出）", description="郵件主旨")
+
+
+@app.post("/api/export-news-batch")
+async def export_and_send_news_batch(req: BatchExportNewsRequest):
+    """
+    批次匯出多個文件的新聞到一個 Excel 並發送郵件
+    """
+    try:
+        if not req.documents or len(req.documents) == 0:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "未提供文件"}
+            )
+        
+        if not req.recipient_email:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "未提供收件人郵箱地址"}
+            )
+        
+        # 使用絕對路徑確保檔案位置正確
+        base_dir = Path(__file__).parent
+        output_dir = base_dir / "exports"
+        output_dir.mkdir(exist_ok=True)
+        
+        print(f"📁 輸出目錄: {output_dir}")
+        print(f"📦 文件數量: {len(req.documents)}")
+        print(f"📝 文件列表: {[doc.get('name', '未命名') for doc in req.documents]}")
+        
+        # 批次生成 Excel 檔案
+        excel_result = generate_batch_news_excel(
+            documents=req.documents,
+            output_dir=str(output_dir)
+        )
+        
+        if not excel_result.get("success"):
+            print(f"❌ Excel 批次生成失敗: {excel_result.get('error')}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": excel_result.get("error", "批次生成 Excel 失敗")}
+            )
+        
+        filepath = excel_result["filepath"]
+        filename = excel_result["filename"]
+        news_items = excel_result.get("news_items", [])
+        
+        print(f"✅ Excel 已生成: {filepath}")
+        print(f"📊 新聞總數: {len(news_items)}")
+        print(f"📂 檔案存在: {os.path.exists(filepath)}")
+        print(f"📦 檔案大小: {os.path.getsize(filepath) if os.path.exists(filepath) else 0} bytes")
+        
+        # 生成郵件內容
+        doc_names = [doc.get('name', '未命名') for doc in req.documents]
+        email_body = generate_news_report_html(
+            document_name=f"批次匯出（{len(req.documents)} 個文件）",
+            news_items=news_items
+        )
+        
+        print(f"📧 準備發送郵件至: {req.recipient_email}")
+        print(f"📎 附件路徑: {filepath}")
+        print(f"📎 附件名稱: {filename}")
+        
+        # 發送郵件
+        email_result = send_email_with_attachment(
+            to_email=req.recipient_email,
+            subject=req.subject,
+            body=email_body,
+            attachment_path=filepath,
+            attachment_name=filename
+        )
+        
+        print(f"📬 郵件發送結果: {email_result}")
+        
+        # 清理舊檔案（保留 7 天）
+        cleanup_old_exports(output_dir=str(output_dir), max_age_days=7)
+        
+        if email_result.get("success"):
+            return JSONResponse(
+                content={
+                    "success": True,
+                    "message": f"已成功匯出 {excel_result['count']} 筆新聞並發送至 {req.recipient_email}",
+                    "filename": filename,
+                    "count": excel_result["count"],
+                    "documents_count": len(req.documents)
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "error": email_result.get("error", "發送郵件失敗"),
+                    "excel_generated": True,
+                    "filepath": filepath
+                }
+            )
+    
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": f"批次處理過程中發生錯誤: {str(e)}"}
         )
 
 

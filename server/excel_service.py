@@ -14,7 +14,9 @@ from openpyxl.utils import get_column_letter
 def parse_news_from_content(content: str) -> List[Dict[str, str]]:
     """
     從文件內容中解析新聞列表
-    預期格式：Markdown 格式，標題為 ###，後接發布時間、摘要和 URL（用反引號包裹）
+    支持兩種格式：
+    1. 單篇新聞文檔（NEWS 類型）：包含標題、發布時間、內容和來源
+    2. 多篇新聞列表（RESEARCH 類型）：Markdown 格式，標題為 ###
     
     Args:
         content: 文件內容（Markdown 格式）
@@ -24,8 +26,52 @@ def parse_news_from_content(content: str) -> List[Dict[str, str]]:
     """
     news_items = []
     
-    # 先移除文末的總結區塊（通常以 "## 摘要" 或 "## 期間重點" 等開頭）
-    # 這些區塊會干擾最後一則新聞的摘要提取
+    # 檢測是否為單篇新聞文檔（以 # 標題開頭，包含發布時間和來源）
+    if content.strip().startswith('# ') and '**發布時間**' in content and '**來源**' in content:
+        # 單篇新聞格式
+        news_item = {
+            'title': '',
+            'date': '',
+            'summary': '',
+            'link': ''
+        }
+        
+        lines = content.strip().split('\n')
+        
+        # 提取標題（第一行，去掉 # 符號）
+        if lines:
+            news_item['title'] = lines[0].replace('#', '').strip()
+        
+        # 提取發布時間
+        date_pattern = r'\*\*發布時間\*\*[：:]\s*(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日]?)'
+        date_match = re.search(date_pattern, content)
+        if date_match:
+            news_item['date'] = date_match.group(1).replace('年', '-').replace('月', '-').replace('日', '')
+        
+        # 提取來源 URL
+        source_pattern = r'\*\*來源\*\*[：:]\s*(https?://[^\s]+)'
+        source_match = re.search(source_pattern, content)
+        if source_match:
+            news_item['link'] = source_match.group(1).strip()
+        
+        # 提取摘要（移除標題、發布時間和來源後的內容）
+        summary_text = content
+        summary_text = re.sub(r'^#[^\n]+\n+', '', summary_text)  # 移除標題
+        summary_text = re.sub(r'\*\*發布時間\*\*[：:][^\n]+\n*', '', summary_text)  # 移除發布時間
+        summary_text = re.sub(r'\*\*來源\*\*[：:][^\n]+', '', summary_text)  # 移除來源
+        summary_text = re.sub(r'\n+', ' ', summary_text)  # 合併換行
+        summary_text = re.sub(r'\s+', ' ', summary_text)  # 合併空白
+        summary_text = summary_text.strip()
+        
+        news_item['summary'] = summary_text[:500] if summary_text else ''
+        
+        if news_item['title'] and news_item['summary']:
+            news_items.append(news_item)
+        
+        return news_items
+    
+    # 原有的多篇新聞列表解析邏輯（RESEARCH 類型）
+    # 先移除文末的總結區塊
     summary_section_pattern = r'\n##\s+(摘要|期間重點|覆蓋度|缺口|後續建議|Credit Memo).*$'
     content = re.sub(summary_section_pattern, '', content, flags=re.DOTALL)
     
@@ -37,7 +83,7 @@ def parse_news_from_content(content: str) -> List[Dict[str, str]]:
         if not section or len(section) < 20:
             continue
         
-        # 跳過非新聞標題（如 "回覆重點"、"越南（Vietnam）" 等國家標題）
+        # 跳過非新聞標題
         first_line = section.split('\n')[0].strip()
         if any(keyword in first_line for keyword in ['回覆重點', '越南', '泰國', '印尼', '菲律賓', '柬埔寨', 'Vietnam', 'Thailand', 'Indonesia', 'Philippines', 'Cambodia']):
             continue
@@ -56,53 +102,35 @@ def parse_news_from_content(content: str) -> List[Dict[str, str]]:
         if lines:
             news_item['title'] = lines[0].strip()
         
-        # 提取發布時間（格式：發布時間：YYYY-MM-DD 或其他日期格式）
+        # 提取發布時間
         date_pattern = r'發布時間[：:]\s*(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日]?)'
         date_match = re.search(date_pattern, section)
         if date_match:
             news_item['date'] = date_match.group(1).replace('年', '-').replace('月', '-').replace('日', '')
         
-        # 提取連結（用反引號包裹的 URL，格式：`https://...`）
+        # 提取連結
         link_pattern = r'`(https?://[^`]+)`'
         link_match = re.search(link_pattern, section)
         if link_match:
             news_item['link'] = link_match.group(1).strip()
         else:
-            # 嘗試提取未用反引號包裹的 URL
             plain_link_match = re.search(r'(https?://[^\s\)]+)', section)
             if plain_link_match:
                 news_item['link'] = plain_link_match.group(1).strip()
         
-        # 提取摘要（移除標題、日期、URL 後的文字）
+        # 提取摘要
         summary_text = section
-        
-        # 移除標題行
         if lines:
             summary_text = '\n'.join(lines[1:])
-        
-        # 移除發布時間行
         summary_text = re.sub(r'發布時間[：:][^\n]+', '', summary_text)
-        
-        # 移除分隔線和後續的國家標題（如 "---\n## 泰國"）
         summary_text = re.sub(r'---+.*$', '', summary_text, flags=re.DOTALL)
-        
-        # 移除 Markdown 連結格式（如 [text](url)，包括不完整的）
         summary_text = re.sub(r'\[([^\]]*)\]\([^\)]*\)', r'\1', summary_text)
-        # 移除殘留的不完整連結格式
         summary_text = re.sub(r'\([^\)]*https?://[^\)]*\)', '', summary_text)
         summary_text = re.sub(r'\[[^\]]*\]', '', summary_text)
-        
-        # 移除 URL（包括反引號包裹的和普通的）
         summary_text = re.sub(r'`https?://[^`]+`', '', summary_text)
         summary_text = re.sub(r'https?://[^\s]+', '', summary_text)
-        
-        # 移除 Markdown 標題符號
         summary_text = re.sub(r'#+\s*', '', summary_text)
-        
-        # 清理多餘的括號
         summary_text = re.sub(r'\(\s*\)', '', summary_text)
-        
-        # 清理多餘空白和換行
         summary_text = re.sub(r'\n+', ' ', summary_text)
         summary_text = re.sub(r'\s+', ' ', summary_text)
         summary_text = summary_text.strip()
@@ -254,3 +282,122 @@ def cleanup_old_exports(output_dir: str = "exports", max_age_days: int = 7):
     
     except Exception as e:
         print(f"清理舊檔案時發生錯誤: {e}")
+
+
+def generate_batch_news_excel(
+    documents: List[Dict[str, str]],
+    output_dir: str = "exports"
+) -> Dict[str, Any]:
+    """
+    批次匯出多個文件的新聞到一個 Excel 檔案
+    
+    Args:
+        documents: 文件列表，每個文件包含 name 和 content
+        output_dir: 輸出目錄
+        
+    Returns:
+        包含 success, filepath, filename, count, news_items 的字典
+    """
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 收集所有新聞項目
+        all_news_items = []
+        
+        for doc in documents:
+            doc_name = doc.get('name', '未命名')
+            doc_content = doc.get('content', '')
+            
+            if not doc_content:
+                continue
+            
+            # 解析該文件的新聞
+            news_items = parse_news_from_content(doc_content)
+            
+            # 為每個新聞添加來源文件標記
+            for item in news_items:
+                item['source_doc'] = doc_name
+            
+            all_news_items.extend(news_items)
+        
+        if not all_news_items:
+            return {
+                "success": False,
+                "error": "沒有找到可匯出的新聞項目"
+            }
+        
+        # 創建 Excel
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "新聞報告"
+        
+        # 設定標題行
+        headers = ["編號", "新聞標題", "發布時間", "新聞摘要", "新聞連結", "來源文件"]
+        ws.append(headers)
+        
+        # 設定標題樣式
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=11)
+        header_alignment = Alignment(horizontal="center", vertical="center")
+        
+        for col in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+        
+        # 填入新聞資料
+        for idx, news in enumerate(all_news_items, start=1):
+            ws.append([
+                idx,
+                news.get('title', ''),
+                news.get('date', ''),
+                news.get('summary', ''),
+                news.get('link', ''),
+                news.get('source_doc', '')
+            ])
+        
+        # 設定欄寬
+        column_widths = {
+            'A': 8,   # 編號
+            'B': 40,  # 標題
+            'C': 15,  # 時間
+            'D': 60,  # 摘要
+            'E': 50,  # 連結
+            'F': 30   # 來源文件
+        }
+        
+        for col, width in column_widths.items():
+            ws.column_dimensions[col].width = width
+        
+        # 設定資料行樣式
+        data_alignment = Alignment(vertical="top", wrap_text=True)
+        for row in range(2, len(all_news_items) + 2):
+            for col in range(1, len(headers) + 1):
+                cell = ws.cell(row=row, column=col)
+                cell.alignment = data_alignment
+        
+        # 凍結首行
+        ws.freeze_panes = "A2"
+        
+        # 生成檔案名稱
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"新聞報告_批次匯出_{timestamp}.xlsx"
+        filepath = os.path.join(output_dir, filename)
+        
+        # 儲存檔案
+        wb.save(filepath)
+        
+        return {
+            "success": True,
+            "filepath": filepath,
+            "filename": filename,
+            "count": len(all_news_items),
+            "news_items": all_news_items
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"批次生成 Excel 時發生錯誤: {str(e)}"
+        }

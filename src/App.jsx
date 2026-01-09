@@ -55,6 +55,16 @@ const estimatePages = (content) => {
 const initialDocs = [];
 
 
+// 預定義的任務階段
+const predefinedStages = [
+  { id: 'init', label: '初始化', order: 1 },
+  { id: 'analyze', label: '分析需求', order: 2 },
+  { id: 'search', label: '搜尋資料', order: 3 },
+  { id: 'process', label: '處理內容', order: 4 },
+  { id: 'generate', label: '生成結果', order: 5 },
+  { id: 'complete', label: '完成', order: 6 },
+];
+
 const initialRoutingSteps = [];
 
 const initialMessages = [];
@@ -147,16 +157,28 @@ const normalizeRiskLevel = (level = '') => {
 };
 
 export default function App() {
+  // 登入狀態
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+
   const [documents, setDocuments] = useState(initialDocs);
   const [selectedDocId, setSelectedDocId] = useState(initialDocs[0]?.id || '');
   const [currentDocForExport, setCurrentDocForExport] = useState(null); // 要匯出的文件
   const [showExportModal, setShowExportModal] = useState(false); // 匯出對話框
   const [recipientEmail, setRecipientEmail] = useState(''); // 收件人郵箱
   const [isExporting, setIsExporting] = useState(false); // 匯出中
+  const [selectedNewsIds, setSelectedNewsIds] = useState([]); // 多選新聞 ID
+  const [showBatchExportModal, setShowBatchExportModal] = useState(false); // 批次匯出對話框
+  const [batchRecipientEmail, setBatchRecipientEmail] = useState(''); // 批次匯出收件人
+  const [isBatchExporting, setIsBatchExporting] = useState(false); // 批次匯出中
   const [editingDocId, setEditingDocId] = useState(''); // For tag editing
   const [customTags, setCustomTags] = useState([]); // User-created tags
   const [newTagInput, setNewTagInput] = useState('');
   const [routingSteps, setRoutingSteps] = useState(initialRoutingSteps);
+  const [currentStage, setCurrentStage] = useState(''); // 當前執行的階段 ID
+  const [completedStages, setCompletedStages] = useState([]); // 已完成的階段 ID 列表
   const [messages, setMessages] = useState(initialMessages);
   const [composerText, setComposerText] = useState('');
   const [activeTab, setActiveTab] = useState('documents');
@@ -183,6 +205,19 @@ export default function App() {
   });
 
   const [activeTranslationIndex, setActiveTranslationIndex] = useState(0);
+
+  // 登入處理
+  const handleLogin = (e) => {
+    e.preventDefault();
+    setLoginError('');
+    
+    if (loginUsername === 'CathaySEA' && loginPassword === 'CathaySEA') {
+      setIsAuthenticated(true);
+    } else {
+      setLoginError('帳號或密碼錯誤');
+      setLoginPassword('');
+    }
+  };
 
   // 從數據庫載入新聞記錄
   useEffect(() => {
@@ -540,6 +575,8 @@ export default function App() {
     }
     setMessages([]);
     setRoutingSteps([]);
+    setCurrentStage('');
+    setCompletedStages([]);
     setArtifacts({
       summaries: [],
       translations: [],
@@ -625,6 +662,136 @@ export default function App() {
     }
   };
 
+  // 切換新聞選中狀態
+  const handleToggleNewsSelection = (docId) => {
+    setSelectedNewsIds((prev) => {
+      if (prev.includes(docId)) {
+        return prev.filter(id => id !== docId);
+      } else {
+        return [...prev, docId];
+      }
+    });
+  };
+
+  // 全選/全不選
+  const handleToggleSelectAll = () => {
+    const exportableDocs = documents.filter(
+      (doc) => (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content
+    );
+    if (selectedNewsIds.length === exportableDocs.length) {
+      setSelectedNewsIds([]);
+    } else {
+      setSelectedNewsIds(exportableDocs.map(doc => doc.id));
+    }
+  };
+
+  // 開啟批次匯出對話框
+  const handleOpenBatchExport = () => {
+    if (selectedNewsIds.length === 0) {
+      alert('請先勾選要匯出的新聞');
+      return;
+    }
+    setShowBatchExportModal(true);
+  };
+
+  // 批次匯出並發送郵件
+  const handleBatchExportAndSend = async () => {
+    if (selectedNewsIds.length === 0) {
+      setErrorMessage('未選擇新聞');
+      return;
+    }
+
+    if (!batchRecipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(batchRecipientEmail)) {
+      setErrorMessage('請輸入有效的郵箱地址');
+      return;
+    }
+
+    setIsBatchExporting(true);
+    setErrorMessage('');
+
+    try {
+      // 獲取所有選中的文件
+      const selectedDocs = documents.filter(doc => selectedNewsIds.includes(doc.id));
+      
+      const response = await fetch(`${apiBase || ''}/api/export-news-batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          documents: selectedDocs.map(doc => ({
+            id: doc.id,
+            name: doc.name,
+            content: doc.content || '',
+          })),
+          recipient_email: batchRecipientEmail,
+          subject: '東南亞新聞輿情報告（批次匯出）',
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        setShowBatchExportModal(false);
+        setBatchRecipientEmail('');
+        setSelectedNewsIds([]);
+        alert(`✅ 已成功將 ${result.count} 筆新聞匯出並發送至 ${batchRecipientEmail}`);
+      } else {
+        setErrorMessage(result.error || '批次匯出失敗');
+      }
+    } catch (error) {
+      console.error('批次匯出錯誤:', error);
+      setErrorMessage('批次匯出過程中發生錯誤，請稍後再試');
+    } finally {
+      setIsBatchExporting(false);
+    }
+  };
+
+  // 批量刪除新聞
+  const handleBatchDelete = async () => {
+    if (selectedNewsIds.length === 0) {
+      alert('請先勾選要刪除的新聞');
+      return;
+    }
+
+    const selectedDocs = documents.filter(doc => selectedNewsIds.includes(doc.id));
+    const confirmMessage = `確定要刪除 ${selectedNewsIds.length} 筆新聞嗎？\n\n${selectedDocs.map(doc => '• ' + doc.name).slice(0, 5).join('\n')}${selectedDocs.length > 5 ? '\n...' : ''}`;
+    
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
+    try {
+      // 批量刪除
+      const deletePromises = selectedNewsIds.map(docId =>
+        fetch(`${apiBase || ''}/api/news/records/${docId}`, {
+          method: 'DELETE',
+        })
+      );
+
+      const results = await Promise.all(deletePromises);
+      const successCount = results.filter(r => r.ok).length;
+
+      // 從前端狀態中移除已刪除的項目
+      setDocuments((prev) => {
+        const next = prev.filter((doc) => !selectedNewsIds.includes(doc.id));
+        // Update selection if needed
+        if (selectedNewsIds.includes(selectedDocId)) {
+          setSelectedDocId(next[0]?.id || '');
+        }
+        return next;
+      });
+
+      setSelectedNewsIds([]);
+      alert(`✅ 已成功刪除 ${successCount} 筆新聞`);
+
+      if (successCount < selectedNewsIds.length) {
+        setErrorMessage(`部分刪除失敗：${selectedNewsIds.length - successCount} 筆`);
+      }
+    } catch (error) {
+      console.error('批量刪除錯誤:', error);
+      alert('批量刪除時發生錯誤，請稍後再試');
+    }
+  };
+
   const handleSend = async () => {
     const trimmed = composerText.trim();
     if (!trimmed || isLoading) return;
@@ -645,6 +812,8 @@ export default function App() {
     setErrorMessage('');
     setStreamingContent('');
     setRoutingSteps([]);
+    setCurrentStage('init'); // 開始時設為初始化階段
+    setCompletedStages([]);
     setReasoningSummary('');
 
     try {
@@ -694,6 +863,38 @@ export default function App() {
           }
           return [...prev, update];
         });
+        
+        // 根據任務狀態更新階段
+        const label = (update.label || '').toLowerCase();
+        
+        if (update.status === 'running') {
+          // 根據 label 推測當前階段
+          if (label.includes('模型生成')) {
+            setCurrentStage('analyze');
+            setCompletedStages(['init']);
+          } else if (label.includes('網路查詢') || label.includes('搜尋') || label.includes('web') || label.includes('search')) {
+            setCurrentStage('search');
+            setCompletedStages(['init', 'analyze']);
+          } else if (label.includes('文件檢索') || label.includes('knowledge') || label.includes('檢索')) {
+            setCurrentStage('process');
+            setCompletedStages(['init', 'analyze', 'search']);
+          }
+        } else if (update.status === 'done') {
+          // 任務完成時的處理
+          if (label.includes('模型生成')) {
+            // 模型生成完成，進入生成階段
+            setCurrentStage('generate');
+            setCompletedStages(['init', 'analyze', 'search', 'process']);
+          } else if (label.includes('網路查詢') || label.includes('搜尋') || label.includes('web') || label.includes('search')) {
+            // 搜尋完成，進入處理階段
+            setCurrentStage('process');
+            setCompletedStages((prev) => [...new Set([...prev, 'init', 'analyze', 'search'])]);
+          } else if (label.includes('文件檢索') || label.includes('knowledge') || label.includes('檢索')) {
+            // 檢索完成，進入生成階段
+            setCurrentStage('generate');
+            setCompletedStages((prev) => [...new Set([...prev, 'init', 'analyze', 'search', 'process'])]);
+          }
+        }
       };
 
       if (!contentType.includes('text/event-stream')) {
@@ -742,6 +943,9 @@ export default function App() {
 
               // Handle final complete data or done signal
               if (parsed.done) {
+                // 任務完成，標記所有階段為完成
+                setCurrentStage('complete');
+                setCompletedStages(['init', 'analyze', 'search', 'process', 'generate', 'complete']);
                 continue;
               }
 
@@ -797,7 +1001,7 @@ export default function App() {
         const appendedDocs = data.documents_append.map((doc) => ({
           id: doc.id || createId(),
           name: doc.name || '未命名',
-          type: doc.type || 'RESEARCH',
+          type: doc.type || 'NEWS',
           pages: doc.pages ?? '-',
           tags: Array.isArray(doc.tags) ? doc.tags : [],
           content: doc.content || doc.preview || '',
@@ -806,7 +1010,9 @@ export default function App() {
           tag_key: doc.tag_key || doc.id,
           status: doc.status || 'indexed',
           message: doc.message || '',
-          source: doc.source || 'research',
+          source: doc.source || 'news',
+          publish_date: doc.publish_date || '',
+          url: doc.url || '',
         }));
 
         setDocuments((prev) => {
@@ -938,6 +1144,9 @@ export default function App() {
             eta: step.eta || '完成',
           }))
         );
+        // 任務完成，標記所有階段為完成
+        setCurrentStage('complete');
+        setCompletedStages(['init', 'analyze', 'search', 'process', 'generate']);
       } else if (!hasRoutingUpdates) {
         setRoutingSteps([]);
       }
@@ -953,12 +1162,19 @@ export default function App() {
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
+      
+      // 標記所有階段為完成
+      setCurrentStage('complete');
+      setCompletedStages(['init', 'analyze', 'search', 'process', 'generate', 'complete']);
     } catch (error) {
       setErrorMessage(
         error instanceof Error
           ? `連線失敗: ${error.message}`
           : '連線失敗，請稍後再試。'
       );
+      // 錯誤時也重置進度
+      setCurrentStage('');
+      setCompletedStages([]);
     } finally {
       setIsLoading(false);
       setStreamingContent('');
@@ -989,12 +1205,71 @@ export default function App() {
         neutralColor: '#1c1a18',
       }}
     >
-      <div className="artifact-app">
-        <header className="artifact-header">
-          <div className="brand">
-            <div className="brand-icon">
-              <Icon icon={Landmark} size="small" />
+      {!isAuthenticated ? (
+        <div className="login-container">
+          <div className="login-box">
+            <div className="login-header">
+              <div className="brand-icon" style={{ fontSize: '48px' }}>📰</div>
+              <Text as="h1" weight="700" style={{ fontSize: '28px', margin: '16px 0 8px' }}>
+                SEA News 東南亞新聞情報系統
+              </Text>
+              <Text style={{ color: 'var(--muted)', marginBottom: '32px' }}>
+                Cathay United Bank
+              </Text>
             </div>
+            <form onSubmit={handleLogin} className="login-form">
+              <div className="login-field">
+                <label htmlFor="username" className="login-label">
+                  帳號
+                </label>
+                <input
+                  id="username"
+                  type="text"
+                  className="login-input"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  placeholder="請輸入帳號"
+                  autoComplete="username"
+                  autoFocus
+                />
+              </div>
+              <div className="login-field">
+                <label htmlFor="password" className="login-label">
+                  密碼
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  className="login-input"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="請輸入密碼"
+                  autoComplete="current-password"
+                />
+              </div>
+              {loginError && (
+                <div className="login-error">
+                  {loginError}
+                </div>
+              )}
+              <Button
+                type="primary"
+                htmlType="submit"
+                size="large"
+                style={{ width: '100%', marginTop: '8px' }}
+              >
+                登入
+              </Button>
+            </form>
+          </div>
+        </div>
+      ) : (
+        <div className="artifact-app">
+          <header className="artifact-header">
+            <div className="brand">
+              <div className="brand-icon">
+                <Icon icon={Landmark} size="small" />
+              </div>
             <div>
               <Text as="h1" weight="700" className="brand-title">
                 新聞輿情系統
@@ -1012,7 +1287,36 @@ export default function App() {
                   新聞集
                 </Text>
               </div>
-              
+              <div className="panel-actions">
+                {documents.some((doc) => (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content) && (
+                  <>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={handleToggleSelectAll}
+                    >
+                      {selectedNewsIds.length === documents.filter(doc => (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content).length ? '取消全選' : '全選'}
+                    </Button>
+                    <Button
+                      type="primary"
+                      size="small"
+                      onClick={handleOpenBatchExport}
+                      disabled={selectedNewsIds.length === 0}
+                    >
+                      匯出已勾選 ({selectedNewsIds.length})
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={handleBatchDelete}
+                      disabled={selectedNewsIds.length === 0}
+                      style={{ color: '#ff4d4f', borderColor: '#ff4d4f' }}
+                    >
+                      刪除已勾選 ({selectedNewsIds.length})
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
 
             <div className="doc-tray">
@@ -1020,6 +1324,8 @@ export default function App() {
                 <div className="doc-grid">
                   {documents.map((doc) => {
                     const isEditing = editingDocId === doc.id;
+                    const isExportable = (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content;
+                    const isSelected = selectedNewsIds.includes(doc.id);
 
                     return (
                       <div
@@ -1028,9 +1334,21 @@ export default function App() {
                         onClick={() => !isEditing && setSelectedDocId(doc.id)}
                       >
                         <div className="doc-card-row">
+                          {isExportable && (
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                handleToggleNewsSelection(doc.id);
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ marginRight: '8px', cursor: 'pointer' }}
+                            />
+                          )}
                           <div className="doc-title">{doc.name}</div>
                           <Tag size="small" color="blue">{doc.type}</Tag>
-                          {doc.type === 'RESEARCH' && doc.content && (
+                          {isExportable && (
                             <ActionIcon
                               icon={Download}
                               size="small"
@@ -1362,21 +1680,42 @@ export default function App() {
               ))}
             </div>
 
-            <div className={`routing-panel${hasRouting ? '' : ' is-empty'}`}>
+            <div className="routing-panel">
               <div className="routing-header">
                 <div className="tray-title">
                   <Icon icon={ListChecks} size="small" />
                   <span>任務路由</span>
                 </div>
               </div>
-              <div className="routing-summary">
-                {latestRoutingStatus ? (
-                  <span className={`status-pill ${latestRoutingStatus.className || ''}`}>
-                    {latestRoutingStatus.label || '等待中'}
-                  </span>
-                ) : null}
-                <span className="routing-summary-text">{routingSummaryText}</span>
+              
+              {/* 顯示預定義的任務階段 */}
+              <div className="routing-stages">
+                {predefinedStages.map((stage, index) => {
+                  const isCompleted = completedStages.includes(stage.id);
+                  const isCurrent = currentStage === stage.id;
+                  const isPending = !isCompleted && !isCurrent;
+                  
+                  return (
+                    <div 
+                      key={stage.id} 
+                      className={`routing-stage ${
+                        isCompleted ? 'is-completed' : 
+                        isCurrent ? 'is-current' : 
+                        'is-pending'
+                      }`}
+                    >
+                      <div className="stage-indicator">
+                        <div className="stage-number">{stage.order}</div>
+                        {index < predefinedStages.length - 1 && (
+                          <div className="stage-connector"></div>
+                        )}
+                      </div>
+                      <div className="stage-label">{stage.label}</div>
+                    </div>
+                  );
+                })}
               </div>
+              
               {reasoningSummary ? (
                 <div className="routing-reasoning">
                   <span className="routing-reasoning-label">Reasoning</span>
@@ -1411,10 +1750,10 @@ export default function App() {
             </div>
           </section>
         </div>
-      </div>
-      {/* 匯出彈窗 */}
-      {showExportModal && (
-        <div 
+        
+        {/* 匯出彈窗 */}
+        {showExportModal && (
+          <div 
           style={{
             position: 'fixed',
             top: 0,
@@ -1486,6 +1825,104 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* 批次匯出彈窗 */}
+      {showBatchExportModal && (
+        <div 
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000
+          }}
+          onClick={() => setShowBatchExportModal(false)}
+        >
+          <div 
+            style={{
+              backgroundColor: 'white',
+              borderRadius: '8px',
+              padding: '24px',
+              minWidth: '450px',
+              maxWidth: '600px',
+              maxHeight: '80vh',
+              overflow: 'auto',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Text as="h3" weight="600" style={{ marginBottom: '16px' }}>
+              批次匯出新聞報告
+            </Text>
+            <div style={{ marginBottom: '16px' }}>
+              <Text size="small" weight="500" style={{ marginBottom: '8px', display: 'block' }}>
+                已選擇 {selectedNewsIds.length} 筆新聞
+              </Text>
+              <div style={{ 
+                maxHeight: '150px', 
+                overflow: 'auto', 
+                padding: '12px', 
+                backgroundColor: '#f5f5f5', 
+                borderRadius: '4px',
+                fontSize: '13px'
+              }}>
+                {documents
+                  .filter(doc => selectedNewsIds.includes(doc.id))
+                  .map(doc => (
+                    <div key={doc.id} style={{ padding: '4px 0' }}>
+                      ✓ {doc.name}
+                    </div>
+                  ))
+                }
+              </div>
+            </div>
+            <div style={{ marginBottom: '16px' }}>
+              <Text size="small" weight="500" style={{ marginBottom: '8px', display: 'block' }}>
+                收件人郵箱
+              </Text>
+              <input
+                type="email"
+                value={batchRecipientEmail}
+                onChange={(e) => setBatchRecipientEmail(e.target.value)}
+                placeholder="請輸入收件人郵箱地址"
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid #d9d9d9',
+                  borderRadius: '4px',
+                  fontSize: '14px'
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <Button
+                variant="outlined"
+                onClick={() => {
+                  setShowBatchExportModal(false);
+                  setBatchRecipientEmail('');
+                }}
+                disabled={isBatchExporting}
+              >
+                取消
+              </Button>
+              <Button
+                type="primary"
+                onClick={handleBatchExportAndSend}
+                disabled={isBatchExporting || !batchRecipientEmail.trim()}
+              >
+                {isBatchExporting ? '處理中...' : '批次寄送'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
       )}
     </ThemeProvider>
   );

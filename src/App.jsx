@@ -157,6 +157,12 @@ const normalizeRiskLevel = (level = '') => {
 };
 
 export default function App() {
+  // 登入狀態
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+
   const [documents, setDocuments] = useState(initialDocs);
   const [selectedDocId, setSelectedDocId] = useState(initialDocs[0]?.id || '');
   const [currentDocForExport, setCurrentDocForExport] = useState(null); // 要匯出的文件
@@ -199,6 +205,19 @@ export default function App() {
   });
 
   const [activeTranslationIndex, setActiveTranslationIndex] = useState(0);
+
+  // 登入處理
+  const handleLogin = (e) => {
+    e.preventDefault();
+    setLoginError('');
+    
+    if (loginUsername === 'CathaySEA' && loginPassword === 'CathaySEA') {
+      setIsAuthenticated(true);
+    } else {
+      setLoginError('帳號或密碼錯誤');
+      setLoginPassword('');
+    }
+  };
 
   // 從數據庫載入新聞記錄
   useEffect(() => {
@@ -1186,12 +1205,71 @@ export default function App() {
         neutralColor: '#1c1a18',
       }}
     >
-      <div className="artifact-app">
-        <header className="artifact-header">
-          <div className="brand">
-            <div className="brand-icon">
-              <Icon icon={Landmark} size="small" />
+      {!isAuthenticated ? (
+        <div className="login-container">
+          <div className="login-box">
+            <div className="login-header">
+              <div className="brand-icon" style={{ fontSize: '48px' }}>📰</div>
+              <Text as="h1" weight="700" style={{ fontSize: '28px', margin: '16px 0 8px' }}>
+                SEA News 東南亞新聞情報系統
+              </Text>
+              <Text style={{ color: 'var(--muted)', marginBottom: '32px' }}>
+                Cathay United Bank
+              </Text>
             </div>
+            <form onSubmit={handleLogin} className="login-form">
+              <div className="login-field">
+                <label htmlFor="username" className="login-label">
+                  帳號
+                </label>
+                <input
+                  id="username"
+                  type="text"
+                  className="login-input"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  placeholder="請輸入帳號"
+                  autoComplete="username"
+                  autoFocus
+                />
+              </div>
+              <div className="login-field">
+                <label htmlFor="password" className="login-label">
+                  密碼
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  className="login-input"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="請輸入密碼"
+                  autoComplete="current-password"
+                />
+              </div>
+              {loginError && (
+                <div className="login-error">
+                  {loginError}
+                </div>
+              )}
+              <Button
+                type="primary"
+                htmlType="submit"
+                size="large"
+                style={{ width: '100%', marginTop: '8px' }}
+              >
+                登入
+              </Button>
+            </form>
+          </div>
+        </div>
+      ) : (
+        <div className="artifact-app">
+          <header className="artifact-header">
+            <div className="brand">
+              <div className="brand-icon">
+                <Icon icon={Landmark} size="small" />
+              </div>
             <div>
               <Text as="h1" weight="700" className="brand-title">
                 新聞輿情系統
@@ -1672,10 +1750,10 @@ export default function App() {
             </div>
           </section>
         </div>
-      </div>
-      {/* 匯出彈窗 */}
-      {showExportModal && (
-        <div 
+        
+        {/* 匯出彈窗 */}
+        {showExportModal && (
+          <div 
           style={{
             position: 'fixed',
             top: 0,
@@ -1843,6 +1921,8 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+      </div>
       )}
     </ThemeProvider>
   );

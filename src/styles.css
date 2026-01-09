@@ -395,11 +395,11 @@ body {
 .routing-panel {
   background: rgba(255, 255, 255, 0.65);
   border-radius: 18px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   border: 1px solid rgba(34, 49, 70, 0.08);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
   overflow: hidden;
 }
@@ -413,6 +413,132 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+/* 任務階段顯示 - 橫式 */
+.routing-stages {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0;
+}
+
+.routing-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  flex-shrink: 0;
+  padding: 0 8px;
+}
+
+.stage-indicator {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  position: relative;
+}
+
+.stage-number {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  border: 2px solid;
+  transition: all 0.3s ease;
+  z-index: 1;
+  background: white;
+  flex-shrink: 0;
+}
+
+.stage-connector {
+  position: absolute;
+  left: 28px;
+  width: 24px;
+  height: 2px;
+  transition: all 0.3s ease;
+}
+
+.routing-stage:last-child .stage-connector {
+  display: none;
+}
+
+.stage-label {
+  font-size: 11px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  white-space: nowrap;
+  text-align: center;
+}
+
+/* 待處理階段 - 灰色 */
+.routing-stage.is-pending .stage-number {
+  border-color: #d9d9d9;
+  color: #8c8c8c;
+  background: #fafafa;
+}
+
+.routing-stage.is-pending .stage-connector {
+  background: #e8e8e8;
+}
+
+.routing-stage.is-pending .stage-label {
+  color: #8c8c8c;
+}
+
+/* 進行中階段 - 藍色 */
+.routing-stage.is-current .stage-number {
+  border-color: #1890ff;
+  color: #1890ff;
+  background: #e6f7ff;
+  box-shadow: 0 0 0 3px rgba(24, 144, 255, 0.1);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.routing-stage.is-current .stage-connector {
+  background: linear-gradient(to right, #1890ff, #e8e8e8);
+}
+
+.routing-stage.is-current .stage-label {
+  color: #1890ff;
+  font-weight: 600;
+}
+
+/* 已完成階段 - 綠色 */
+.routing-stage.is-completed .stage-number {
+  border-color: #52c41a;
+  color: white;
+  background: #52c41a;
+}
+
+.routing-stage.is-completed .stage-connector {
+  background: #52c41a;
+}
+
+.routing-stage.is-completed .stage-label {
+  color: #52c41a;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 3px rgba(24, 144, 255, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(24, 144, 255, 0.2);
+  }
+}
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(24, 144, 255, 0.2);
+  }
 }
 
 .routing-summary {

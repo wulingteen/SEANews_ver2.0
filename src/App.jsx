@@ -55,6 +55,16 @@ const estimatePages = (content) => {
 const initialDocs = [];
 
 
+// 預定義的任務階段
+const predefinedStages = [
+  { id: 'init', label: '初始化', order: 1 },
+  { id: 'analyze', label: '分析需求', order: 2 },
+  { id: 'search', label: '搜尋資料', order: 3 },
+  { id: 'process', label: '處理內容', order: 4 },
+  { id: 'generate', label: '生成結果', order: 5 },
+  { id: 'complete', label: '完成', order: 6 },
+];
+
 const initialRoutingSteps = [];
 
 const initialMessages = [];
@@ -161,6 +171,8 @@ export default function App() {
   const [customTags, setCustomTags] = useState([]); // User-created tags
   const [newTagInput, setNewTagInput] = useState('');
   const [routingSteps, setRoutingSteps] = useState(initialRoutingSteps);
+  const [currentStage, setCurrentStage] = useState(''); // 當前執行的階段 ID
+  const [completedStages, setCompletedStages] = useState([]); // 已完成的階段 ID 列表
   const [messages, setMessages] = useState(initialMessages);
   const [composerText, setComposerText] = useState('');
   const [activeTab, setActiveTab] = useState('documents');
@@ -544,6 +556,8 @@ export default function App() {
     }
     setMessages([]);
     setRoutingSteps([]);
+    setCurrentStage('');
+    setCompletedStages([]);
     setArtifacts({
       summaries: [],
       translations: [],
@@ -732,6 +746,8 @@ export default function App() {
     setErrorMessage('');
     setStreamingContent('');
     setRoutingSteps([]);
+    setCurrentStage('init'); // 開始時設為初始化階段
+    setCompletedStages([]);
     setReasoningSummary('');
 
     try {
@@ -781,6 +797,32 @@ export default function App() {
           }
           return [...prev, update];
         });
+        
+        // 根據任務狀態更新階段
+        const label = (update.label || '').toLowerCase();
+        
+        if (update.status === 'running') {
+          // 根據 label 推測當前階段
+          if (label.includes('模型生成')) {
+            setCurrentStage('analyze');
+            setCompletedStages(['init']);
+          } else if (label.includes('網路查詢') || label.includes('搜尋') || label.includes('web') || label.includes('search')) {
+            setCurrentStage('search');
+            setCompletedStages(['init', 'analyze']);
+          } else if (label.includes('文件檢索') || label.includes('knowledge') || label.includes('檢索')) {
+            setCurrentStage('process');
+            setCompletedStages(['init', 'analyze', 'search']);
+          } else if (label.includes('生成')) {
+            setCurrentStage('generate');
+            setCompletedStages(['init', 'analyze', 'search', 'process']);
+          }
+        } else if (update.status === 'done') {
+          // 任務完成，檢查是否為最後一個
+          if (label.includes('模型生成')) {
+            setCurrentStage('generate');
+            setCompletedStages(['init', 'analyze', 'search', 'process']);
+          }
+        }
       };
 
       if (!contentType.includes('text/event-stream')) {
@@ -1027,6 +1069,9 @@ export default function App() {
             eta: step.eta || '完成',
           }))
         );
+        // 任務完成，標記所有階段為完成
+        setCurrentStage('complete');
+        setCompletedStages(['init', 'analyze', 'search', 'process', 'generate']);
       } else if (!hasRoutingUpdates) {
         setRoutingSteps([]);
       }
@@ -1485,21 +1530,42 @@ export default function App() {
               ))}
             </div>
 
-            <div className={`routing-panel${hasRouting ? '' : ' is-empty'}`}>
+            <div className="routing-panel">
               <div className="routing-header">
                 <div className="tray-title">
                   <Icon icon={ListChecks} size="small" />
                   <span>任務路由</span>
                 </div>
               </div>
-              <div className="routing-summary">
-                {latestRoutingStatus ? (
-                  <span className={`status-pill ${latestRoutingStatus.className || ''}`}>
-                    {latestRoutingStatus.label || '等待中'}
-                  </span>
-                ) : null}
-                <span className="routing-summary-text">{routingSummaryText}</span>
+              
+              {/* 顯示預定義的任務階段 */}
+              <div className="routing-stages">
+                {predefinedStages.map((stage, index) => {
+                  const isCompleted = completedStages.includes(stage.id);
+                  const isCurrent = currentStage === stage.id;
+                  const isPending = !isCompleted && !isCurrent;
+                  
+                  return (
+                    <div 
+                      key={stage.id} 
+                      className={`routing-stage ${
+                        isCompleted ? 'is-completed' : 
+                        isCurrent ? 'is-current' : 
+                        'is-pending'
+                      }`}
+                    >
+                      <div className="stage-indicator">
+                        <div className="stage-number">{stage.order}</div>
+                        {index < predefinedStages.length - 1 && (
+                          <div className="stage-connector"></div>
+                        )}
+                      </div>
+                      <div className="stage-label">{stage.label}</div>
+                    </div>
+                  );
+                })}
               </div>
+              
               {reasoningSummary ? (
                 <div className="routing-reasoning">
                   <span className="routing-reasoning-label">Reasoning</span>

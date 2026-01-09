@@ -829,7 +829,7 @@ def build_routing_update(event: Any, routing_state: Dict[str, str]) -> Optional[
     if event_name in {TeamRunEvent.run_completed.value, RunEvent.run_completed.value}:
         step_id = "run-main"
         routing_state.setdefault(step_id, step_id)
-        return {"id": step_id, "label": "模型生成", "status": "done", "eta": "完成"}
+        return {"id": step_id, "label": "模型生成", "status": "done", "eta": ""}
 
     if event_name in {TeamRunEvent.run_error.value, RunEvent.run_error.value}:
         step_id = "run-main"
@@ -861,7 +861,7 @@ def build_routing_update(event: Any, routing_state: Dict[str, str]) -> Optional[
             "id": routing_state[tool_key],
             "label": format_tool_label(getattr(tool, "tool_name", None)),
             "status": "done",
-            "eta": "完成",
+            "eta": "",
         }
 
     if event_name in {TeamRunEvent.tool_call_error.value, RunEvent.tool_call_error.value}:
@@ -1142,12 +1142,13 @@ def build_team(
     enable_vision: bool = False,
 ) -> Team:
     model = get_model(enable_web_search=enable_web_search, enable_vision=enable_vision)
-    rag_agent = build_rag_agent(doc_ids, get_model())
+    # RAG Agent 已停用以提升速度，如需啟用請取消下方註解
+    # rag_agent = build_rag_agent(doc_ids, get_model())
     research_agent = build_research_agent()
     vision_agent = build_vision_agent()
     return Team(
         name="東南亞新聞輿情分析助理",
-        members=[rag_agent, research_agent, vision_agent],
+        members=[research_agent, vision_agent],  # 移除 rag_agent
         model=model,
         instructions=TEAM_INSTRUCTIONS,
         expected_output=EXPECTED_OUTPUT,
@@ -1471,17 +1472,21 @@ async def generate_artifacts(req: ArtifactRequest):
                         if update_routing_log(routing_log, ocr_done):
                             yield f"data: {json.dumps({'routing_update': ocr_done})}\n\n"
 
-                    ensure_inline_documents_indexed(req.documents)
-                    doc_ids = [
-                        doc.id
-                        for doc in req.documents
-                        if doc.id and doc.id in rag_store.docs
-                    ]
+                    # RAG 索引已停用以提升速度，如需啟用請取消下方註解
+                    # ensure_inline_documents_indexed(req.documents)
+                    doc_ids = []
+                    # doc_ids = [
+                    #     doc.id
+                    #     for doc in req.documents
+                    #     if doc.id and doc.id in rag_store.docs
+                    # ]
+
                     team = build_team(
                         doc_ids,
                         enable_web_search=use_web_search,
                         enable_vision=use_vision,
                     )
+
                     if use_web_search:
                         team.tool_choice = WEB_SEARCH_TOOL
 
@@ -1502,8 +1507,8 @@ async def generate_artifacts(req: ArtifactRequest):
 
                     response = team.run(
                         prompt,
-                        dependencies={"doc_ids": doc_ids},
-                        add_dependencies_to_context=True,
+                        # dependencies={"doc_ids": doc_ids},  # RAG 已停用
+                        # add_dependencies_to_context=True,
                         images=image_inputs if image_inputs else None,
                         stream=True,
                         stream_events=True,
@@ -1573,12 +1578,14 @@ async def generate_artifacts(req: ArtifactRequest):
         else:
             # Non-streaming response
             ocr_updates = run_ocr_for_documents(req.documents)
-            ensure_inline_documents_indexed(req.documents)
-            doc_ids = [
-                doc.id
-                for doc in req.documents
-                if doc.id and doc.id in rag_store.docs
-            ]
+            # RAG 索引已停用以提升速度，如需啟用請取消下方註解
+            # ensure_inline_documents_indexed(req.documents)
+            doc_ids = []
+            # doc_ids = [
+            #     doc.id
+            #     for doc in req.documents
+            #     if doc.id and doc.id in rag_store.docs
+            # ]
             team = build_team(
                 doc_ids,
                 enable_web_search=use_web_search,

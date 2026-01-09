@@ -11,6 +11,41 @@ from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 
 
+def extract_country_from_name(name: str) -> str:
+    """
+    從文件名稱中提取國家名稱
+    
+    Args:
+        name: 文件名稱
+        
+    Returns:
+        國家名稱（中文）
+    """
+    name_lower = name.lower()
+    
+    # 國家關鍵字映射
+    country_mapping = {
+        '越南': ['越南', 'vietnam', 'vn', 'viet'],
+        '泰國': ['泰國', 'thailand', 'thai'],
+        '印尼': ['印尼', 'indonesia', 'indonesian'],
+        '菲律賓': ['菲律賓', 'philippines', 'philippine', 'filipino'],
+        '柬埔寨': ['柬埔寨', 'cambodia', 'cambodian'],
+        '新加坡': ['新加坡', 'singapore'],
+        '馬來西亞': ['馬來西亞', 'malaysia', 'malaysian'],
+        '緬甸': ['緬甸', 'myanmar', 'burma'],
+        '寮國': ['寮國', 'laos', 'lao']
+    }
+    
+    # 檢查名稱中是否包含國家關鍵字
+    for country, keywords in country_mapping.items():
+        for keyword in keywords:
+            if keyword in name_lower:
+                return country
+    
+    # 如果沒有匹配到，返回原始名稱
+    return name
+
+
 def parse_news_from_content(content: str) -> List[Dict[str, str]]:
     """
     從文件內容中解析新聞列表
@@ -58,8 +93,10 @@ def parse_news_from_content(content: str) -> List[Dict[str, str]]:
         summary_text = content
         summary_text = re.sub(r'^#[^\n]+\n+', '', summary_text)  # 移除標題
         summary_text = re.sub(r'\*\*發布時間\*\*[：:][^\n]+\n*', '', summary_text)  # 移除發布時間
-        summary_text = re.sub(r'\*\*來源\*\*[：:][^\n]+', '', summary_text)  # 移除來源
-        summary_text = re.sub(r'\n+', ' ', summary_text)  # 合併換行
+        summary_text = re.sub(r'\*\*來源\*\*[：:][^\n]+', '', summary_text)  # 移除來源        # 移除所有 URL
+        summary_text = re.sub(r'`https?://[^`]+`', '', summary_text)  # 移除反引號中的 URL
+        summary_text = re.sub(r'\[[^\]]*\]\([^\)]*https?://[^\)]*\)', '', summary_text)  # 移除 Markdown 連結
+        summary_text = re.sub(r'https?://[^\s\)\]]+', '', summary_text)  # 移除所有其他 URL        summary_text = re.sub(r'\n+', ' ', summary_text)  # 合併換行
         summary_text = re.sub(r'\s+', ' ', summary_text)  # 合併空白
         summary_text = summary_text.strip()
         
@@ -124,13 +161,14 @@ def parse_news_from_content(content: str) -> List[Dict[str, str]]:
             summary_text = '\n'.join(lines[1:])
         summary_text = re.sub(r'發布時間[：:][^\n]+', '', summary_text)
         summary_text = re.sub(r'---+.*$', '', summary_text, flags=re.DOTALL)
-        summary_text = re.sub(r'\[([^\]]*)\]\([^\)]*\)', r'\1', summary_text)
-        summary_text = re.sub(r'\([^\)]*https?://[^\)]*\)', '', summary_text)
-        summary_text = re.sub(r'\[[^\]]*\]', '', summary_text)
-        summary_text = re.sub(r'`https?://[^`]+`', '', summary_text)
-        summary_text = re.sub(r'https?://[^\s]+', '', summary_text)
+        # 移除所有類型的 URL
+        summary_text = re.sub(r'\[([^\]]*)\]\([^\)]*\)', r'\1', summary_text)  # Markdown 連結轉文字
+        summary_text = re.sub(r'\([^\)]*https?://[^\)]*\)', '', summary_text)  # 括號內的 URL
+        summary_text = re.sub(r'\[[^\]]*\]', '', summary_text)  # 移除剩餘的中括號
+        summary_text = re.sub(r'`https?://[^`]+`', '', summary_text)  # 反引號中的 URL
+        summary_text = re.sub(r'https?://[^\s\)\]]+', '', summary_text)  # 所有其他 URL
         summary_text = re.sub(r'#+\s*', '', summary_text)
-        summary_text = re.sub(r'\(\s*\)', '', summary_text)
+        summary_text = re.sub(r'\(\s*\)', '', summary_text)  # 移除空括號
         summary_text = re.sub(r'\n+', ' ', summary_text)
         summary_text = re.sub(r'\s+', ' ', summary_text)
         summary_text = summary_text.strip()
@@ -173,13 +211,18 @@ def generate_news_excel(
                 "error": "未能從文件中解析出新聞項目"
             }
         
-        # 創建 Excel 工作簿
+        # 提取國家名稱
+        country = extract_country_from_name(document_name)
+        for item in news_items:
+            item['source_doc'] = country
+        
+        # 創建 Excel
         wb = Workbook()
         ws = wb.active
-        ws.title = "新聞列表"
+        ws.title = "新聞報告"
         
         # 設定標題行
-        headers = ["編號", "新聞標題", "發布時間", "新聞摘要", "新聞連結"]
+        headers = ["編號", "新聞標題", "發布時間", "新聞摘要", "新聞連結", "來源國家"]
         ws.append(headers)
         
         # 設定標題樣式
@@ -200,7 +243,8 @@ def generate_news_excel(
                 news.get('title', ''),
                 news.get('date', ''),
                 news.get('summary', ''),
-                news.get('link', '')
+                news.get('link', ''),
+                news.get('source_doc', '')
             ])
         
         # 設定欄寬
@@ -209,7 +253,8 @@ def generate_news_excel(
             'B': 40,  # 標題
             'C': 15,  # 時間
             'D': 60,  # 摘要
-            'E': 50   # 連結
+            'E': 50,  # 連結
+            'F': 20   # 來源國家
         }
         
         for col, width in column_widths.items():
@@ -314,9 +359,10 @@ def generate_batch_news_excel(
             # 解析該文件的新聞
             news_items = parse_news_from_content(doc_content)
             
-            # 為每個新聞添加來源文件標記
+            # 為每個新聞添加來源國家標記
+            country = extract_country_from_name(doc_name)
             for item in news_items:
-                item['source_doc'] = doc_name
+                item['source_doc'] = country
             
             all_news_items.extend(news_items)
         
@@ -332,7 +378,7 @@ def generate_batch_news_excel(
         ws.title = "新聞報告"
         
         # 設定標題行
-        headers = ["編號", "新聞標題", "發布時間", "新聞摘要", "新聞連結", "來源文件"]
+        headers = ["編號", "新聞標題", "發布時間", "新聞摘要", "新聞連結", "來源國家"]
         ws.append(headers)
         
         # 設定標題樣式
@@ -364,7 +410,7 @@ def generate_batch_news_excel(
             'C': 15,  # 時間
             'D': 60,  # 摘要
             'E': 50,  # 連結
-            'F': 30   # 來源文件
+            'F': 20   # 來源國家
         }
         
         for col, width in column_widths.items():

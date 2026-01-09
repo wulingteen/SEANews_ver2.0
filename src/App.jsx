@@ -726,6 +726,53 @@ export default function App() {
     }
   };
 
+  // 批量刪除新聞
+  const handleBatchDelete = async () => {
+    if (selectedNewsIds.length === 0) {
+      alert('請先勾選要刪除的新聞');
+      return;
+    }
+
+    const selectedDocs = documents.filter(doc => selectedNewsIds.includes(doc.id));
+    const confirmMessage = `確定要刪除 ${selectedNewsIds.length} 筆新聞嗎？\n\n${selectedDocs.map(doc => '• ' + doc.name).slice(0, 5).join('\n')}${selectedDocs.length > 5 ? '\n...' : ''}`;
+    
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
+    try {
+      // 批量刪除
+      const deletePromises = selectedNewsIds.map(docId =>
+        fetch(`${apiBase || ''}/api/news/records/${docId}`, {
+          method: 'DELETE',
+        })
+      );
+
+      const results = await Promise.all(deletePromises);
+      const successCount = results.filter(r => r.ok).length;
+
+      // 從前端狀態中移除已刪除的項目
+      setDocuments((prev) => {
+        const next = prev.filter((doc) => !selectedNewsIds.includes(doc.id));
+        // Update selection if needed
+        if (selectedNewsIds.includes(selectedDocId)) {
+          setSelectedDocId(next[0]?.id || '');
+        }
+        return next;
+      });
+
+      setSelectedNewsIds([]);
+      alert(`✅ 已成功刪除 ${successCount} 筆新聞`);
+
+      if (successCount < selectedNewsIds.length) {
+        setErrorMessage(`部分刪除失敗：${selectedNewsIds.length - successCount} 筆`);
+      }
+    } catch (error) {
+      console.error('批量刪除錯誤:', error);
+      alert('批量刪除時發生錯誤，請稍後再試');
+    }
+  };
+
   const handleSend = async () => {
     const trimmed = composerText.trim();
     if (!trimmed || isLoading) return;
@@ -812,15 +859,21 @@ export default function App() {
           } else if (label.includes('文件檢索') || label.includes('knowledge') || label.includes('檢索')) {
             setCurrentStage('process');
             setCompletedStages(['init', 'analyze', 'search']);
-          } else if (label.includes('生成')) {
-            setCurrentStage('generate');
-            setCompletedStages(['init', 'analyze', 'search', 'process']);
           }
         } else if (update.status === 'done') {
-          // 任務完成，檢查是否為最後一個
+          // 任務完成時的處理
           if (label.includes('模型生成')) {
+            // 模型生成完成，進入生成階段
             setCurrentStage('generate');
             setCompletedStages(['init', 'analyze', 'search', 'process']);
+          } else if (label.includes('網路查詢') || label.includes('搜尋') || label.includes('web') || label.includes('search')) {
+            // 搜尋完成，進入處理階段
+            setCurrentStage('process');
+            setCompletedStages((prev) => [...new Set([...prev, 'init', 'analyze', 'search'])]);
+          } else if (label.includes('文件檢索') || label.includes('knowledge') || label.includes('檢索')) {
+            // 檢索完成，進入生成階段
+            setCurrentStage('generate');
+            setCompletedStages((prev) => [...new Set([...prev, 'init', 'analyze', 'search', 'process'])]);
           }
         }
       };
@@ -871,6 +924,9 @@ export default function App() {
 
               // Handle final complete data or done signal
               if (parsed.done) {
+                // 任務完成，標記所有階段為完成
+                setCurrentStage('complete');
+                setCompletedStages(['init', 'analyze', 'search', 'process', 'generate', 'complete']);
                 continue;
               }
 
@@ -1087,12 +1143,19 @@ export default function App() {
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
+      
+      // 標記所有階段為完成
+      setCurrentStage('complete');
+      setCompletedStages(['init', 'analyze', 'search', 'process', 'generate', 'complete']);
     } catch (error) {
       setErrorMessage(
         error instanceof Error
           ? `連線失敗: ${error.message}`
           : '連線失敗，請稍後再試。'
       );
+      // 錯誤時也重置進度
+      setCurrentStage('');
+      setCompletedStages([]);
     } finally {
       setIsLoading(false);
       setStreamingContent('');
@@ -1163,6 +1226,15 @@ export default function App() {
                       disabled={selectedNewsIds.length === 0}
                     >
                       匯出已勾選 ({selectedNewsIds.length})
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={handleBatchDelete}
+                      disabled={selectedNewsIds.length === 0}
+                      style={{ color: '#ff4d4f', borderColor: '#ff4d4f' }}
+                    >
+                      刪除已勾選 ({selectedNewsIds.length})
                     </Button>
                   </>
                 )}

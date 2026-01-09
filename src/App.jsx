@@ -153,6 +153,10 @@ export default function App() {
   const [showExportModal, setShowExportModal] = useState(false); // 匯出對話框
   const [recipientEmail, setRecipientEmail] = useState(''); // 收件人郵箱
   const [isExporting, setIsExporting] = useState(false); // 匯出中
+  const [selectedNewsIds, setSelectedNewsIds] = useState([]); // 多選新聞 ID
+  const [showBatchExportModal, setShowBatchExportModal] = useState(false); // 批次匯出對話框
+  const [batchRecipientEmail, setBatchRecipientEmail] = useState(''); // 批次匯出收件人
+  const [isBatchExporting, setIsBatchExporting] = useState(false); // 批次匯出中
   const [editingDocId, setEditingDocId] = useState(''); // For tag editing
   const [customTags, setCustomTags] = useState([]); // User-created tags
   const [newTagInput, setNewTagInput] = useState('');
@@ -625,6 +629,89 @@ export default function App() {
     }
   };
 
+  // 切換新聞選中狀態
+  const handleToggleNewsSelection = (docId) => {
+    setSelectedNewsIds((prev) => {
+      if (prev.includes(docId)) {
+        return prev.filter(id => id !== docId);
+      } else {
+        return [...prev, docId];
+      }
+    });
+  };
+
+  // 全選/全不選
+  const handleToggleSelectAll = () => {
+    const exportableDocs = documents.filter(
+      (doc) => (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content
+    );
+    if (selectedNewsIds.length === exportableDocs.length) {
+      setSelectedNewsIds([]);
+    } else {
+      setSelectedNewsIds(exportableDocs.map(doc => doc.id));
+    }
+  };
+
+  // 開啟批次匯出對話框
+  const handleOpenBatchExport = () => {
+    if (selectedNewsIds.length === 0) {
+      alert('請先勾選要匯出的新聞');
+      return;
+    }
+    setShowBatchExportModal(true);
+  };
+
+  // 批次匯出並發送郵件
+  const handleBatchExportAndSend = async () => {
+    if (selectedNewsIds.length === 0) {
+      setErrorMessage('未選擇新聞');
+      return;
+    }
+
+    if (!batchRecipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(batchRecipientEmail)) {
+      setErrorMessage('請輸入有效的郵箱地址');
+      return;
+    }
+
+    setIsBatchExporting(true);
+    setErrorMessage('');
+
+    try {
+      // 獲取所有選中的文件
+      const selectedDocs = documents.filter(doc => selectedNewsIds.includes(doc.id));
+      
+      const response = await fetch(`${apiBase || ''}/api/export-news-batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          documents: selectedDocs.map(doc => ({
+            id: doc.id,
+            name: doc.name,
+            content: doc.content || '',
+          })),
+          recipient_email: batchRecipientEmail,
+          subject: '東南亞新聞輿情報告（批次匯出）',
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        setShowBatchExportModal(false);
+        setBatchRecipientEmail('');
+        setSelectedNewsIds([]);
+        alert(`✅ 已成功將 ${result.count} 筆新聞匯出並發送至 ${batchRecipientEmail}`);
+      } else {
+        setErrorMessage(result.error || '批次匯出失敗');
+      }
+    } catch (error) {
+      console.error('批次匯出錯誤:', error);
+      setErrorMessage('批次匯出過程中發生錯誤，請稍後再試');
+    } finally {
+      setIsBatchExporting(false);
+    }
+  };
+
   const handleSend = async () => {
     const trimmed = composerText.trim();
     if (!trimmed || isLoading) return;
@@ -1014,7 +1101,27 @@ export default function App() {
                   新聞集
                 </Text>
               </div>
-              
+              <div className="panel-actions">
+                {documents.some((doc) => (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content) && (
+                  <>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={handleToggleSelectAll}
+                    >
+                      {selectedNewsIds.length === documents.filter(doc => (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content).length ? '取消全選' : '全選'}
+                    </Button>
+                    <Button
+                      type="primary"
+                      size="small"
+                      onClick={handleOpenBatchExport}
+                      disabled={selectedNewsIds.length === 0}
+                    >
+                      匯出已勾選 ({selectedNewsIds.length})
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
 
             <div className="doc-tray">
@@ -1022,6 +1129,8 @@ export default function App() {
                 <div className="doc-grid">
                   {documents.map((doc) => {
                     const isEditing = editingDocId === doc.id;
+                    const isExportable = (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content;
+                    const isSelected = selectedNewsIds.includes(doc.id);
 
                     return (
                       <div
@@ -1030,9 +1139,21 @@ export default function App() {
                         onClick={() => !isEditing && setSelectedDocId(doc.id)}
                       >
                         <div className="doc-card-row">
+                          {isExportable && (
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                handleToggleNewsSelection(doc.id);
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ marginRight: '8px', cursor: 'pointer' }}
+                            />
+                          )}
                           <div className="doc-title">{doc.name}</div>
                           <Tag size="small" color="blue">{doc.type}</Tag>
-                          {(doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content && (
+                          {isExportable && (
                             <ActionIcon
                               icon={Download}
                               size="small"
@@ -1484,6 +1605,102 @@ export default function App() {
                 disabled={isExporting || !recipientEmail.trim()}
               >
                 {isExporting ? '處理中...' : '寄送'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 批次匯出彈窗 */}
+      {showBatchExportModal && (
+        <div 
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000
+          }}
+          onClick={() => setShowBatchExportModal(false)}
+        >
+          <div 
+            style={{
+              backgroundColor: 'white',
+              borderRadius: '8px',
+              padding: '24px',
+              minWidth: '450px',
+              maxWidth: '600px',
+              maxHeight: '80vh',
+              overflow: 'auto',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Text as="h3" weight="600" style={{ marginBottom: '16px' }}>
+              批次匯出新聞報告
+            </Text>
+            <div style={{ marginBottom: '16px' }}>
+              <Text size="small" weight="500" style={{ marginBottom: '8px', display: 'block' }}>
+                已選擇 {selectedNewsIds.length} 筆新聞
+              </Text>
+              <div style={{ 
+                maxHeight: '150px', 
+                overflow: 'auto', 
+                padding: '12px', 
+                backgroundColor: '#f5f5f5', 
+                borderRadius: '4px',
+                fontSize: '13px'
+              }}>
+                {documents
+                  .filter(doc => selectedNewsIds.includes(doc.id))
+                  .map(doc => (
+                    <div key={doc.id} style={{ padding: '4px 0' }}>
+                      ✓ {doc.name}
+                    </div>
+                  ))
+                }
+              </div>
+            </div>
+            <div style={{ marginBottom: '16px' }}>
+              <Text size="small" weight="500" style={{ marginBottom: '8px', display: 'block' }}>
+                收件人郵箱
+              </Text>
+              <input
+                type="email"
+                value={batchRecipientEmail}
+                onChange={(e) => setBatchRecipientEmail(e.target.value)}
+                placeholder="請輸入收件人郵箱地址"
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid #d9d9d9',
+                  borderRadius: '4px',
+                  fontSize: '14px'
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <Button
+                variant="outlined"
+                onClick={() => {
+                  setShowBatchExportModal(false);
+                  setBatchRecipientEmail('');
+                }}
+                disabled={isBatchExporting}
+              >
+                取消
+              </Button>
+              <Button
+                type="primary"
+                onClick={handleBatchExportAndSend}
+                disabled={isBatchExporting || !batchRecipientEmail.trim()}
+              >
+                {isBatchExporting ? '處理中...' : '批次寄送'}
               </Button>
             </div>
           </div>

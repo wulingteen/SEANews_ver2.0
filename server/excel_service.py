@@ -282,3 +282,122 @@ def cleanup_old_exports(output_dir: str = "exports", max_age_days: int = 7):
     
     except Exception as e:
         print(f"清理舊檔案時發生錯誤: {e}")
+
+
+def generate_batch_news_excel(
+    documents: List[Dict[str, str]],
+    output_dir: str = "exports"
+) -> Dict[str, Any]:
+    """
+    批次匯出多個文件的新聞到一個 Excel 檔案
+    
+    Args:
+        documents: 文件列表，每個文件包含 name 和 content
+        output_dir: 輸出目錄
+        
+    Returns:
+        包含 success, filepath, filename, count, news_items 的字典
+    """
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 收集所有新聞項目
+        all_news_items = []
+        
+        for doc in documents:
+            doc_name = doc.get('name', '未命名')
+            doc_content = doc.get('content', '')
+            
+            if not doc_content:
+                continue
+            
+            # 解析該文件的新聞
+            news_items = parse_news_from_content(doc_content)
+            
+            # 為每個新聞添加來源文件標記
+            for item in news_items:
+                item['source_doc'] = doc_name
+            
+            all_news_items.extend(news_items)
+        
+        if not all_news_items:
+            return {
+                "success": False,
+                "error": "沒有找到可匯出的新聞項目"
+            }
+        
+        # 創建 Excel
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "新聞報告"
+        
+        # 設定標題行
+        headers = ["編號", "新聞標題", "發布時間", "新聞摘要", "新聞連結", "來源文件"]
+        ws.append(headers)
+        
+        # 設定標題樣式
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=11)
+        header_alignment = Alignment(horizontal="center", vertical="center")
+        
+        for col in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=col)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+        
+        # 填入新聞資料
+        for idx, news in enumerate(all_news_items, start=1):
+            ws.append([
+                idx,
+                news.get('title', ''),
+                news.get('date', ''),
+                news.get('summary', ''),
+                news.get('link', ''),
+                news.get('source_doc', '')
+            ])
+        
+        # 設定欄寬
+        column_widths = {
+            'A': 8,   # 編號
+            'B': 40,  # 標題
+            'C': 15,  # 時間
+            'D': 60,  # 摘要
+            'E': 50,  # 連結
+            'F': 30   # 來源文件
+        }
+        
+        for col, width in column_widths.items():
+            ws.column_dimensions[col].width = width
+        
+        # 設定資料行樣式
+        data_alignment = Alignment(vertical="top", wrap_text=True)
+        for row in range(2, len(all_news_items) + 2):
+            for col in range(1, len(headers) + 1):
+                cell = ws.cell(row=row, column=col)
+                cell.alignment = data_alignment
+        
+        # 凍結首行
+        ws.freeze_panes = "A2"
+        
+        # 生成檔案名稱
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"新聞報告_批次匯出_{timestamp}.xlsx"
+        filepath = os.path.join(output_dir, filename)
+        
+        # 儲存檔案
+        wb.save(filepath)
+        
+        return {
+            "success": True,
+            "filepath": filepath,
+            "filename": filename,
+            "count": len(all_news_items),
+            "news_items": all_news_items
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"批次生成 Excel 時發生錯誤: {str(e)}"
+        }

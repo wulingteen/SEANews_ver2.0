@@ -25,7 +25,7 @@ from agno.models.openai.responses import OpenAIResponses
 from rag_store import RagStore
 from tag_store import get_doc_tags, load_tag_store, set_custom_tags, set_doc_tags
 from email_service import send_email_with_attachment, generate_news_report_html
-from excel_service import generate_news_excel, cleanup_old_exports
+from excel_service import generate_news_excel, generate_batch_news_excel, cleanup_old_exports
 from news_store import news_store
 
 
@@ -1744,6 +1744,115 @@ async def get_news_records():
         return JSONResponse(
             status_code=500,
             content={"error": f"獲取新聞記錄失敗: {str(e)}"}
+        )
+
+
+class BatchExportNewsRequest(BaseModel):
+    """批次匯出新聞請求"""
+    documents: List[Dict[str, str]] = Field(..., description="文件列表，每個包含 id, name, content")
+    recipient_email: str = Field(..., description="收件人郵箱地址")
+    subject: Optional[str] = Field(default="東南亞新聞輿情報告（批次匯出）", description="郵件主旨")
+
+
+@app.post("/api/export-news-batch")
+async def export_and_send_news_batch(req: BatchExportNewsRequest):
+    """
+    批次匯出多個文件的新聞到一個 Excel 並發送郵件
+    """
+    try:
+        if not req.documents or len(req.documents) == 0:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "未提供文件"}
+            )
+        
+        if not req.recipient_email:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "未提供收件人郵箱地址"}
+            )
+        
+        # 使用絕對路徑確保檔案位置正確
+        base_dir = Path(__file__).parent
+        output_dir = base_dir / "exports"
+        output_dir.mkdir(exist_ok=True)
+        
+        print(f"📁 輸出目錄: {output_dir}")
+        print(f"📦 文件數量: {len(req.documents)}")
+        print(f"📝 文件列表: {[doc.get('name', '未命名') for doc in req.documents]}")
+        
+        # 批次生成 Excel 檔案
+        excel_result = generate_batch_news_excel(
+            documents=req.documents,
+            output_dir=str(output_dir)
+        )
+        
+        if not excel_result.get("success"):
+            print(f"❌ Excel 批次生成失敗: {excel_result.get('error')}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": excel_result.get("error", "批次生成 Excel 失敗")}
+            )
+        
+        filepath = excel_result["filepath"]
+        filename = excel_result["filename"]
+        news_items = excel_result.get("news_items", [])
+        
+        print(f"✅ Excel 已生成: {filepath}")
+        print(f"📊 新聞總數: {len(news_items)}")
+        print(f"📂 檔案存在: {os.path.exists(filepath)}")
+        print(f"📦 檔案大小: {os.path.getsize(filepath) if os.path.exists(filepath) else 0} bytes")
+        
+        # 生成郵件內容
+        doc_names = [doc.get('name', '未命名') for doc in req.documents]
+        email_body = generate_news_report_html(
+            document_name=f"批次匯出（{len(req.documents)} 個文件）",
+            news_items=news_items
+        )
+        
+        print(f"📧 準備發送郵件至: {req.recipient_email}")
+        print(f"📎 附件路徑: {filepath}")
+        print(f"📎 附件名稱: {filename}")
+        
+        # 發送郵件
+        email_result = send_email_with_attachment(
+            to_email=req.recipient_email,
+            subject=req.subject,
+            body=email_body,
+            attachment_path=filepath,
+            attachment_name=filename
+        )
+        
+        print(f"📬 郵件發送結果: {email_result}")
+        
+        # 清理舊檔案（保留 7 天）
+        cleanup_old_exports(output_dir=str(output_dir), max_age_days=7)
+        
+        if email_result.get("success"):
+            return JSONResponse(
+                content={
+                    "success": True,
+                    "message": f"已成功匯出 {excel_result['count']} 筆新聞並發送至 {req.recipient_email}",
+                    "filename": filename,
+                    "count": excel_result["count"],
+                    "documents_count": len(req.documents)
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "error": email_result.get("error", "發送郵件失敗"),
+                    "excel_generated": True,
+                    "filepath": filepath
+                }
+            )
+    
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": f"批次處理過程中發生錯誤: {str(e)}"}
         )
 
 

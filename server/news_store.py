@@ -37,6 +37,9 @@ class NewsStore:
                 pages INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'indexed',
                 source TEXT DEFAULT 'research',
+                country TEXT,
+                url TEXT,
+                publish_date TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -65,8 +68,8 @@ class NewsStore:
             
             cursor.execute("""
                 INSERT INTO news_records 
-                (id, name, type, content, preview, tags, pages, status, source, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, name, type, content, preview, tags, pages, status, source, country, url, publish_date, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 record.get('id'),
                 record.get('name'),
@@ -77,6 +80,9 @@ class NewsStore:
                 record.get('pages', 0),
                 record.get('status', 'indexed'),
                 record.get('source', 'research'),
+                record.get('country', ''),
+                record.get('url', ''),
+                record.get('publish_date', ''),
                 datetime.now().isoformat()
             ))
             

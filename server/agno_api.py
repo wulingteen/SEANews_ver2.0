@@ -4,12 +4,14 @@ import json
 import os
 import uuid
 import time
+import secrets
+from datetime import datetime, timedelta
 from mimetypes import guess_type
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union, Literal
 
 import dotenv
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -25,7 +27,13 @@ from agno.models.openai.responses import OpenAIResponses
 from rag_store import RagStore
 from tag_store import get_doc_tags, load_tag_store, set_custom_tags, set_doc_tags
 from email_service import send_email_with_attachment, generate_news_report_html
-from excel_service import generate_news_excel, generate_batch_news_excel, cleanup_old_exports
+from excel_service import (
+    generate_news_excel, 
+    generate_batch_news_excel, 
+    cleanup_old_exports,
+    translate_title_to_chinese,
+    extract_country_from_content
+)
 from news_store import news_store
 
 
@@ -191,6 +199,49 @@ class TagUpdateRequest(BaseModel):
     tag_key: Optional[str] = None
     tags: Optional[List[str]] = None
     custom_tags: Optional[List[str]] = None
+
+
+# 登录相关数据模型
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    success: bool
+    token: Optional[str] = None
+    error: Optional[str] = None
+
+
+# Simple in-memory session store (for production, use Redis or database)
+active_sessions: Dict[str, datetime] = {}
+SESSION_TIMEOUT = timedelta(hours=24)
+
+
+def create_session_token() -> str:
+    """生成安全的会话令牌"""
+    return secrets.token_urlsafe(32)
+
+
+def verify_session(token: str) -> bool:
+    """验证会话令牌是否有效"""
+    if token not in active_sessions:
+        return False
+    
+    if datetime.now() > active_sessions[token]:
+        # Token过期，删除
+        del active_sessions[token]
+        return False
+    
+    return True
+
+
+def cleanup_expired_sessions():
+    """清理过期的会话"""
+    now = datetime.now()
+    expired = [token for token, expiry in active_sessions.items() if now > expiry]
+    for token in expired:
+        del active_sessions[token]
 
 
 def get_model_id() -> str:
@@ -611,12 +662,15 @@ def build_news_documents(
     documents = []
     for article in articles:
         doc_id = str(uuid.uuid4())
-        title = article['title']
+        original_title = article['title']
         content = article['content']
         publish_date = article['publish_date']
         url = article['url']
         
-        # 組合完整內容
+        # 翻譯標題為繁體中文
+        title = translate_title_to_chinese(original_title)
+        
+        # 組合完整內容用於國家判斷
         full_content = f"# {title}\n\n"
         if publish_date:
             full_content += f"**發布時間**: {publish_date}\n\n"
@@ -624,13 +678,16 @@ def build_news_documents(
         if url:
             full_content += f"\n\n**來源**: {url}"
         
-        # 索引到 RAG
+        # 判斷來源國家
+        country = extract_country_from_content(full_content, fallback_name=title)
+        
+        # 索引到 RAG（使用翻譯後的標題）
         rag_store.index_inline_text(doc_id, title, full_content, "NEWS")
         
-        # 創建文件記錄
+        # 創建文件記錄（使用翻譯後的標題）
         document_record = {
             "id": doc_id,
-            "name": title,
+            "name": title,  # 已翻譯的標題
             "type": "NEWS",
             "pages": estimate_pages(full_content),
             "status": "indexed",
@@ -638,9 +695,11 @@ def build_news_documents(
             "preview": content[:300],
             "content": full_content,
             "source": "news",
-            "tags": [],
+            "tags": [country] if country and country != " " else [],  # 將國家作為標籤
+            "country": country,  # 保存國家字段
             "publish_date": publish_date,
-            "url": url
+            "url": url,
+            "country": country  # 保存判斷的國家
         }
         
         # 保存到數據庫
@@ -657,15 +716,15 @@ def build_smalltalk_agent(
     system_status = build_system_status(documents, system_context)
     return Agent(
         name="ChitChat",
-        role="簡短且親切的 RM 助理，僅做寒暄或確認需求，不要主動生成報告。",
+        role="簡短且親切的新聞情報助理，僅做寒暄或確認需求，不要主動生成報告。",
         model=get_model(),
         store_events=STORE_EVENTS,
         instructions=[
-            "你是授信報告助理，可以協助企業授信分析、文件摘要、翻譯等工作。",
+            "你是東南亞新聞情報助理，可以協助新聞檢索、情報分析、文件摘要等工作。",
             "請參考對話紀錄延續脈絡，避免忽略先前內容。",
-            "當用戶詢問「目前有哪些文件」或「系統狀態」時，請根據下方系統狀態資訊回答。",
+            "當用戶詢問「目前有哪些新聞」或「系統狀態」時，請根據下方系統狀態資訊回答。",
             "保持一句或兩句的自然回應，確認需求即可。",
-            "不要承諾開始產出報告或摘要；請詢問使用者需要什麼協助。",
+            "不要承諾開始產出報告或分析；請詢問使用者需要什麼協助。",
             "語氣友善、簡潔，避免冗長。",
             "",
             f"【系統當前狀態】\n{system_status}",
@@ -720,7 +779,7 @@ def run_smalltalk_agent(
         return resp.get_content_as_string()
     except Exception:
         # fallback to static short response
-        return "你好！我是授信報告助理，可以協助摘要、翻譯、風險評估與授信報告草稿。請告訴我需要什麼協助？"
+        return "你好！我是東南亞新聞情報助理，可以協助新聞檢索、情報分析與摘要。請告訴我需要什麼協助？"
 
 
 def run_router_agent(
@@ -1217,6 +1276,56 @@ def preload_sample_pdfs() -> None:
 async def startup_event():
     """應用啟動時預加載示例 PDF"""
     preload_sample_pdfs()
+
+
+@app.post("/api/auth/login")
+async def login(request: LoginRequest):
+    """用户登录验证接口"""
+    try:
+        # 清理过期的会话
+        cleanup_expired_sessions()
+        
+        # 从环境变量读取凭证
+        valid_username = os.getenv("APP_USERNAME", "CathaySEA")
+        valid_password = os.getenv("APP_PASSWORD", "CathaySEA")
+        
+        # 验证用户名和密码
+        if request.username == valid_username and request.password == valid_password:
+            # 生成会话令牌
+            token = create_session_token()
+            active_sessions[token] = datetime.now() + SESSION_TIMEOUT
+            
+            return LoginResponse(
+                success=True,
+                token=token
+            )
+        else:
+            return LoginResponse(
+                success=False,
+                error="帳號或密碼錯誤"
+            )
+    except Exception as e:
+        print(f"登录错误: {e}")
+        return LoginResponse(
+            success=False,
+            error="登入過程中發生錯誤"
+        )
+
+
+class VerifyTokenRequest(BaseModel):
+    token: str
+
+
+@app.post("/api/auth/verify")
+async def verify_token(request: VerifyTokenRequest):
+    """验证会话令牌是否有效"""
+    try:
+        cleanup_expired_sessions()
+        is_valid = verify_session(request.token)
+        return {"valid": is_valid}
+    except Exception as e:
+        print(f"验证错误: {e}")
+        return {"valid": False}
 
 
 @app.get("/api/health")

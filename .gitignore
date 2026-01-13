@@ -2,8 +2,14 @@ node_modules/
 dist/
 .DS_Store
 .env
-.env.*
+.env.local
+.env.production.local
+.env.development.local
 *.log
 .venv/
 __pycache__/
 .vite/
+
+# 允许提交 .env.example 和 .env.production（模板文件）
+!.env.example
+!.env.production

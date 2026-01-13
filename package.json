@@ -8,7 +8,8 @@
     "dev:api": "cd server && ../.venv/Scripts/python -m uvicorn agno_api:app --reload --host 0.0.0.0 --port 8787",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "concurrently \"npm run dev:api\" \"npm run dev\" --names \"API,WEB\" --prefix-colors \"blue,green\""
+    "start": "concurrently \"npm run dev:api\" \"npm run dev\" --names \"API,WEB\" --prefix-colors \"blue,green\"",
+    "start:prod": "cd server && python -m uvicorn agno_api:app --host 0.0.0.0 --port ${PORT:-8787}"
   },
   "dependencies": {
     "@braintree/sanitize-url": "^7.1.1",

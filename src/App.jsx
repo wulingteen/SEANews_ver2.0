@@ -207,17 +207,65 @@ export default function App() {
   const [activeTranslationIndex, setActiveTranslationIndex] = useState(0);
 
   // 登入處理
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setLoginError('');
     
-    if (loginUsername === 'CathaySEA' && loginPassword === 'CathaySEA') {
-      setIsAuthenticated(true);
-    } else {
-      setLoginError('帳號或密碼錯誤');
+    try {
+      const response = await fetch(`${apiBase || ''}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: loginUsername,
+          password: loginPassword
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success && data.token) {
+        // 將token存儲到localStorage
+        localStorage.setItem('authToken', data.token);
+        setIsAuthenticated(true);
+      } else {
+        setLoginError(data.error || '登入失敗');
+        setLoginPassword('');
+      }
+    } catch (error) {
+      console.error('登入錯誤:', error);
+      setLoginError('連線失敗，請稍後再試');
       setLoginPassword('');
     }
   };
+
+  // 自動驗證已存在的token
+  useEffect(() => {
+    const verifyStoredToken = async () => {
+      const token = localStorage.getItem('authToken');
+      if (!token) return;
+
+      try {
+        const response = await fetch(`${apiBase || ''}/api/auth/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token })
+        });
+        
+        const data = await response.json();
+        if (data.valid) {
+          setIsAuthenticated(true);
+        } else {
+          // Token無效，清除
+          localStorage.removeItem('authToken');
+        }
+      } catch (error) {
+        console.warn('Token驗證失敗:', error);
+        localStorage.removeItem('authToken');
+      }
+    };
+
+    verifyStoredToken();
+  }, []);
 
   // 從數據庫載入新聞記錄
   useEffect(() => {
@@ -1275,6 +1323,20 @@ export default function App() {
                 新聞輿情系統
               </Text>
             </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                localStorage.removeItem('authToken');
+                setIsAuthenticated(false);
+                setLoginUsername('');
+                setLoginPassword('');
+              }}
+            >
+              登出
+            </Button>
           </div>
 
         </header>

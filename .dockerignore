@@ -1,0 +1,57 @@
+# Node modules
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv/
+ENV/
+env/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# 構建產物（會在多階段構建中處理）
+dist
+build
+
+# 測試
+.pytest_cache
+*.cover
+.coverage
+htmlcov/
+
+# 環境變量（敏感信息不應打包進鏡像）
+.env
+.env.local
+.env.*.local
+
+# 文檔和說明
+README.md
+*.md
+docs/
+
+# 其他
+.DS_Store
+Thumbs.db
+*.log
+.cache
+exports/
+server/exports/
+server/__pycache__

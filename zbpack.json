@@ -1,0 +1,12 @@
+{
+  "app_name": "seanews",
+  "build_command": "",
+  "python": {
+    "version": "3.11",
+    "package_manager": "pip",
+    "entry": "server/agno_api.py"
+  },
+  "dockerfile": {
+    "name": "Dockerfile"
+  }
+}

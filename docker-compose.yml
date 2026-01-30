@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 構建時使用宿主機的網絡
+        - BUILDKIT_INLINE_CACHE=1
+    network_mode: "bridge"
+    ports:
+      - "8787:8787"
+    environment:
+      # OpenAI 配置（可選，如不提供則 RAG 功能將被禁用）
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      
+      # 應用配置
+      - APP_USERNAME=${APP_USERNAME:-CathaySEA}
+      - APP_PASSWORD=${APP_PASSWORD:-CathaySEA}
+      - PORT=8787
+      
+      # Python 配置
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+    volumes:
+      # 掛載 exports 目錄（用於保存導出的文件）
+      - ./server/exports:/app/server/exports
+      # 可選：掛載資料庫（持久化新聞記錄）
+      - ./server/news_records.db:/app/server/news_records.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8787/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s  # 增加啟動等待時間
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

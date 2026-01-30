@@ -39,7 +39,7 @@ const createId = () => Math.random().toString(36).slice(2, 10);
 // 智能 API 地址检测：
 // - 开发环境：使用空字符串通過 Vite proxy 轉發到後端
 // - 生产环境：使用空字符串（相对路径，与前端同域名）
-const apiBase = import.meta.env.DEV 
+const apiBase = import.meta.env.DEV
   ? ''
   : '';
 
@@ -189,7 +189,7 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState('');
   const [streamingContent, setStreamingContent] = useState('');
   const [reasoningSummary, setReasoningSummary] = useState('');
-  
+
   // 日誌區域自動滾動
   const logContainerRef = useRef(null);
 
@@ -216,12 +216,12 @@ export default function App() {
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoginError('');
-    
+
     try {
       console.log('🔐 [登入] 開始登入流程...');
       const loginUrl = `${apiBase || ''}/api/auth/login`;
       console.log('🔐 [登入] 請求 URL:', loginUrl);
-      
+
       const response = await fetch(loginUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -230,20 +230,20 @@ export default function App() {
           password: loginPassword
         })
       });
-      
+
       console.log('🔐 [登入] 收到回應，狀態:', response.status);
-      
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      
+
       const data = await response.json();
       console.log('🔐 [登入] 回應數據:', { success: data.success, hasToken: !!data.token });
-      
+
       if (data.success && data.token) {
         // 將token存儲到localStorage
         localStorage.setItem('authToken', data.token);
-        
+
         // 清空前端所有狀態（確保登入後是乾淨的）
         console.log('🗑️ [登入] 清空前端狀態...');
         setDocuments([]);
@@ -256,7 +256,7 @@ export default function App() {
         setRoutingSteps([]);
         setSelectedDocId('');
         console.log('✅ [登入] 前端狀態已清空');
-        
+
         setIsAuthenticated(true);
         console.log('🔐 [登入] 登入成功');
       } else {
@@ -266,8 +266,8 @@ export default function App() {
       }
     } catch (error) {
       console.error('🔐 [登入錯誤]', error);
-      const errorMsg = error instanceof Error 
-        ? `連線失敗: ${error.message}` 
+      const errorMsg = error instanceof Error
+        ? `連線失敗: ${error.message}`
         : '連線失敗，請稍後再試';
       setLoginError(errorMsg);
       setLoginPassword('');
@@ -296,7 +296,7 @@ export default function App() {
   // 從數據庫載入新聞記錄（僅在登入後執行一次）
   useEffect(() => {
     if (!isAuthenticated) return;
-    
+
     const loadNewsRecords = async () => {
       try {
         // 每次頁面載入時先清空所有資料（確保乾淨狀態）
@@ -306,13 +306,13 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' }
         });
         console.log('✅ [清空] 資料已清空');
-        
+
         const response = await fetch(`${apiBase || ''}/api/news/records`);
         if (response.ok) {
           const data = await response.json();
           console.log('📰 [載入] 從資料庫載入記錄:', data.documents?.length, '筆');
           console.log('📰 [載入] 第一筆記錄範例:', data.documents?.[0]);
-          
+
           if (data.documents && data.documents.length > 0) {
             setDocuments((prev) => {
               // 去重：只添加前端狀態中不存在的記錄
@@ -374,11 +374,11 @@ export default function App() {
         const response = await fetch(`${apiBase || ''}/api/documents/preloaded`);
         if (!response.ok || !isMounted) return;
         const data = await response.json();
-        
+
         // 獲取已刪除的文件 ID 列表
         const deletedIds = JSON.parse(localStorage.getItem('deletedDocIds') || '[]');
         console.log('📄 [預載] 已刪除ID列表:', deletedIds);
-        
+
         const pdfDocs = (data.documents || [])
           .filter(doc => !deletedIds.includes(doc.id))  // 過濾已刪除的文件
           .map((doc) => ({
@@ -395,9 +395,9 @@ export default function App() {
             message: doc.message,
             source: 'preloaded',
           }));
-        
+
         console.log('📄 [預載] 過濾後文件數:', pdfDocs.length);
-        
+
         if (pdfDocs.length > 0 && isMounted) {
           setDocuments((prev) => {
             // Deduplicate by ID
@@ -569,17 +569,17 @@ export default function App() {
 
   const handleDeleteDoc = async (docId) => {
     console.log('🗑️ [刪除函數被呼叫] docId:', docId);
-    
+
     if (!docId) return;
     const doc = documents.find((d) => d.id === docId);
     if (!doc) {
       console.log('🗑️ [刪除] 找不到文件');
       return;
     }
-    
+
     const docName = doc.name || '文件';
     console.log('🗑️ [刪除] 準備刪除:', { id: docId, name: docName, source: doc.source, type: doc.type });
-    
+
     if (!window.confirm(`確定要刪除「${docName}」嗎？`)) {
       console.log('🗑️ [刪除] 使用者取消');
       return;
@@ -589,23 +589,23 @@ export default function App() {
       // 根據來源決定是否需要呼叫後端 API
       const source = doc.source || 'news';
       console.log('🗑️ [刪除] 文件來源:', source);
-      
+
       if (source === 'news' || source === 'research') {
         // 新聞記錄：從資料庫刪除
         console.log('🗑️ [刪除] 呼叫後端 API:', `${apiBase || ''}/api/news/records/${docId}`);
         const response = await fetch(`${apiBase || ''}/api/news/records/${docId}`, {
           method: 'DELETE',
         });
-        
+
         console.log('🗑️ [刪除] 後端回應狀態:', response.status, response.ok);
-        
+
         if (!response.ok) {
           const errorText = await response.text();
           console.error('🗑️ [刪除] 後端錯誤:', errorText);
           alert('刪除失敗');
           return;
         }
-        
+
         const result = await response.json();
         console.log('🗑️ [刪除] 後端回應:', result);
       } else if (source === 'preloaded' || source === 'uploaded') {
@@ -617,7 +617,7 @@ export default function App() {
           console.log('🗑️ [刪除] 已記錄到 localStorage:', deletedIds.length, '個已刪除ID');
         }
       }
-      
+
       // 從前端狀態中移除
       setDocuments((prev) => {
         const next = prev.filter((d) => d.id !== docId);
@@ -631,7 +631,7 @@ export default function App() {
         }
         return next;
       });
-      
+
       console.log('✅ [刪除] 刪除完成');
     } catch (error) {
       console.error('❌ [刪除] 刪除記錄失敗:', error);
@@ -854,7 +854,7 @@ export default function App() {
     try {
       // 獲取所有選中的文件
       const selectedDocs = documents.filter(doc => selectedNewsIds.includes(doc.id));
-      
+
       const response = await fetch(`${apiBase || ''}/api/export-news-batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -896,7 +896,7 @@ export default function App() {
 
     const selectedDocs = documents.filter(doc => selectedNewsIds.includes(doc.id));
     const confirmMessage = `確定要刪除 ${selectedNewsIds.length} 筆新聞嗎？\n\n${selectedDocs.map(doc => '• ' + doc.name).slice(0, 5).join('\n')}${selectedDocs.length > 5 ? '\n...' : ''}`;
-    
+
     if (!window.confirm(confirmMessage)) {
       return;
     }
@@ -906,13 +906,13 @@ export default function App() {
       const newsRecordIds = selectedDocs
         .filter(doc => doc.source === 'news' || doc.source === 'research')
         .map(doc => doc.id);
-      
+
       const preloadedIds = selectedDocs
         .filter(doc => doc.source === 'preloaded' || doc.source === 'uploaded')
         .map(doc => doc.id);
-      
+
       let successCount = selectedNewsIds.length;
-      
+
       // 只對新聞記錄呼叫刪除 API
       if (newsRecordIds.length > 0) {
         const deletePromises = newsRecordIds.map(docId =>
@@ -923,12 +923,12 @@ export default function App() {
 
         const results = await Promise.all(deletePromises);
         const apiSuccessCount = results.filter(r => r.ok).length;
-        
+
         if (apiSuccessCount < newsRecordIds.length) {
           successCount -= (newsRecordIds.length - apiSuccessCount);
         }
       }
-      
+
       // 預載文件：記錄到 localStorage
       if (preloadedIds.length > 0) {
         const deletedIds = JSON.parse(localStorage.getItem('deletedDocIds') || '[]');
@@ -1014,12 +1014,12 @@ export default function App() {
       const contentType = response.headers.get('content-type') || '';
       let data = null;
       let hasRoutingUpdates = false;
-      
+
       const applyRoutingUpdate = (update) => {
         if (!update || !update.id) return;
-        
+
         console.log('🔄 [路由處理] 應用更新:', update);
-        
+
         setRoutingSteps((prev) => {
           const index = prev.findIndex((step) => step.id === update.id);
           if (index >= 0) {
@@ -1031,13 +1031,13 @@ export default function App() {
           console.log('➕ [路由處理] 新增步驟:', update);
           return [...prev, update];
         });
-        
+
         // 根據後端提供的 stage 標記更新階段
         const stage = update.stage;
         const status = update.status || '';
-        
+
         console.log(`📊 [階段判斷] stage: "${stage}", status: "${status}"`);
-        
+
         // 使用後端明確標記的階段
         if (stage) {
           if (stage === 'analyze' && status === 'running') {
@@ -1097,6 +1097,15 @@ export default function App() {
                 hasRoutingUpdates = true;
                 console.log('📍 [即時路由] 收到更新:', parsed.routing_update);
                 applyRoutingUpdate(parsed.routing_update);
+                continue;
+              }
+
+              // [UX Fix] Handle log chunks to show real-time progress
+              if (parsed.log_chunk) {
+                setReasoningSummary((prev) => {
+                  const newLog = parsed.log_chunk.replace(/^🧠 \[推理日誌\]\s*/, '') + '\n';
+                  return prev + newLog;
+                });
                 continue;
               }
 
@@ -1247,11 +1256,11 @@ export default function App() {
           let summaries = prev.summaries;
           const hasSummaryPayload = Boolean(
             data.summary?.output ||
-              data.summary?.borrower?.name ||
-              data.summary?.borrower?.description ||
-              data.summary?.borrower?.rating ||
-              (data.summary?.metrics || []).length ||
-              (data.summary?.risks || []).length
+            data.summary?.borrower?.name ||
+            data.summary?.borrower?.description ||
+            data.summary?.borrower?.rating ||
+            (data.summary?.metrics || []).length ||
+            (data.summary?.risks || []).length
           );
 
           if (data.summary && hasSummaryPayload) {
@@ -1338,7 +1347,7 @@ export default function App() {
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
-      
+
       // 標記所有階段為完成
       setCurrentStage('complete');
       setCompletedStages(['init', 'analyze', 'search', 'process', 'generate', 'complete']);
@@ -1446,693 +1455,691 @@ export default function App() {
               <div className="brand-icon">
                 <Icon icon={Landmark} size="small" />
               </div>
-            <div>
-              <Text as="h1" weight="700" className="brand-title">
-                新聞輿情系統
-              </Text>
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => {
-                localStorage.removeItem('authToken');
-                setIsAuthenticated(false);
-                setLoginUsername('');
-                setLoginPassword('');
-              }}
-            >
-              登出
-            </Button>
-          </div>
-
-        </header>
-
-        <div className="artifact-shell">
-          <section className="panel docs-panel">
-            <div className="panel-header">
               <div>
-                <Text as="h2" weight="600" className="panel-title">
-                  新聞集
+                <Text as="h1" weight="700" className="brand-title">
+                  新聞輿情系統
                 </Text>
               </div>
-              <div className="panel-actions">
-                {documents.some((doc) => (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content) && (
-                  <>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={handleToggleSelectAll}
-                    >
-                      {selectedNewsIds.length === documents.filter(doc => (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content).length ? '取消全選' : '全選'}
-                    </Button>
-                    <Button
-                      type="primary"
-                      size="small"
-                      onClick={handleOpenBatchExport}
-                      disabled={selectedNewsIds.length === 0}
-                    >
-                      批量匯出 ({selectedNewsIds.length})
-                    </Button>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={handleBatchDelete}
-                      disabled={selectedNewsIds.length === 0}
-                      style={{ color: '#ff4d4f', borderColor: '#ff4d4f' }}
-                    >
-                      批量刪除 ({selectedNewsIds.length})
-                    </Button>
-                  </>
-                )}
-              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => {
+                  localStorage.removeItem('authToken');
+                  setIsAuthenticated(false);
+                  setLoginUsername('');
+                  setLoginPassword('');
+                }}
+              >
+                登出
+              </Button>
             </div>
 
-            <div className="doc-tray">
-              {documents.length > 0 ? (
-                <div className="doc-grid">
-                  {documents.map((doc) => {
-                    const isEditing = editingDocId === doc.id;
-                    const isExportable = (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content;
-                    const isSelected = selectedNewsIds.includes(doc.id);
+          </header>
 
-                    return (
-                      <div
-                        key={doc.id}
-                        className={`doc-card${doc.id === selectedDocId ? ' is-active' : ''}`}
-                        onClick={() => !isEditing && setSelectedDocId(doc.id)}
+          <div className="artifact-shell">
+            <section className="panel docs-panel">
+              <div className="panel-header">
+                <div>
+                  <Text as="h2" weight="600" className="panel-title">
+                    新聞集
+                  </Text>
+                </div>
+                <div className="panel-actions">
+                  {documents.some((doc) => (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content) && (
+                    <>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={handleToggleSelectAll}
                       >
-                        <div className="doc-card-row">
-                          {isExportable && (
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={(e) => {
-                                e.stopPropagation();
-                                handleToggleNewsSelection(doc.id);
-                              }}
-                              onClick={(e) => e.stopPropagation()}
-                              style={{ marginRight: '8px', cursor: 'pointer' }}
-                            />
-                          )}
-                          <div className="doc-title">{doc.name}</div>
-                          <Tag size="small" color="blue">{doc.type}</Tag>
-                          {isExportable && (
+                        {selectedNewsIds.length === documents.filter(doc => (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content).length ? '取消全選' : '全選'}
+                      </Button>
+                      <Button
+                        type="primary"
+                        size="small"
+                        onClick={handleOpenBatchExport}
+                        disabled={selectedNewsIds.length === 0}
+                      >
+                        批量匯出 ({selectedNewsIds.length})
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={handleBatchDelete}
+                        disabled={selectedNewsIds.length === 0}
+                        style={{ color: '#ff4d4f', borderColor: '#ff4d4f' }}
+                      >
+                        批量刪除 ({selectedNewsIds.length})
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="doc-tray">
+                {documents.length > 0 ? (
+                  <div className="doc-grid">
+                    {documents.map((doc) => {
+                      const isEditing = editingDocId === doc.id;
+                      const isExportable = (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content;
+                      const isSelected = selectedNewsIds.includes(doc.id);
+
+                      return (
+                        <div
+                          key={doc.id}
+                          className={`doc-card${doc.id === selectedDocId ? ' is-active' : ''}`}
+                          onClick={() => !isEditing && setSelectedDocId(doc.id)}
+                        >
+                          <div className="doc-card-row">
+                            {isExportable && (
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleNewsSelection(doc.id);
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ marginRight: '8px', cursor: 'pointer' }}
+                              />
+                            )}
+                            <div className="doc-title">{doc.name}</div>
+                            <Tag size="small" color="blue">{doc.type}</Tag>
+                            {isExportable && (
+                              <ActionIcon
+                                icon={Download}
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenExportModal(doc);
+                                }}
+                                title="匯出 Excel 並寄送"
+                              />
+                            )}
                             <ActionIcon
-                              icon={Download}
+                              icon={isEditing ? X : Edit3}
                               size="small"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleOpenExportModal(doc);
+                                handleToggleEditTags(doc.id);
                               }}
-                              title="匯出 Excel 並寄送"
+                              title={isEditing ? '關閉編輯' : '編輯標籤'}
                             />
-                          )}
-                          <ActionIcon
-                            icon={isEditing ? X : Edit3}
-                            size="small"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleToggleEditTags(doc.id);
-                            }}
-                            title={isEditing ? '關閉編輯' : '編輯標籤'}
-                          />
-                          <ActionIcon
-                            icon={Trash}
-                            size="small"
-                            variant="outlined"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteDoc(doc.id);
-                            }}
-                            title="刪除文件"
-                          />
-                        </div>
+                            <ActionIcon
+                              icon={Trash}
+                              size="small"
+                              variant="outlined"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteDoc(doc.id);
+                              }}
+                              title="刪除文件"
+                            />
+                          </div>
 
-                        {isEditing ? (
-                          <div className="tag-editor">
-                            <div className="tag-section">
-                              <div className="tag-section-title">流程狀態</div>
-                              <div className="tag-selector">
-                                {workflowTags.map((tag) => (
-                                  <button
-                                    key={tag}
-                                    type="button"
-                                    className={`tag-option${(doc.tags || []).includes(tag) ? ' is-selected' : ''}`}
-                                    onClick={() => handleToggleTag(doc.id, tag)}
-                                  >
-                                    <Tag size="small" color={tagColors[tag] || 'default'}>
-                                      {tag}
-                                    </Tag>
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-
-                            <div className="tag-section">
-                              <div className="tag-section-title">功能標籤</div>
-                              <div className="tag-selector">
-                                {functionTags.map((tag) => (
-                                  <button
-                                    key={tag}
-                                    type="button"
-                                    className={`tag-option${(doc.tags || []).includes(tag) ? ' is-selected' : ''}`}
-                                    onClick={() => handleToggleTag(doc.id, tag)}
-                                  >
-                                    <Tag size="small" color={tagColors[tag] || 'default'}>
-                                      {tag}
-                                    </Tag>
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-
-                            {customTags.length > 0 && (
+                          {isEditing ? (
+                            <div className="tag-editor">
                               <div className="tag-section">
-                                <div className="tag-section-title">自定義標籤</div>
+                                <div className="tag-section-title">流程狀態</div>
                                 <div className="tag-selector">
-                                  {customTags.map((tag) => (
+                                  {workflowTags.map((tag) => (
                                     <button
                                       key={tag}
                                       type="button"
                                       className={`tag-option${(doc.tags || []).includes(tag) ? ' is-selected' : ''}`}
                                       onClick={() => handleToggleTag(doc.id, tag)}
                                     >
-                                      <Tag size="small" color="purple">
+                                      <Tag size="small" color={tagColors[tag] || 'default'}>
                                         {tag}
                                       </Tag>
                                     </button>
                                   ))}
                                 </div>
                               </div>
-                            )}
 
-                            <div className="tag-add">
-                              <input
-                                type="text"
-                                className="tag-input"
-                                placeholder="新增自定義標籤..."
-                                value={newTagInput}
-                                onChange={(e) => setNewTagInput(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    handleAddCustomTag();
-                                  }
-                                }}
-                              />
-                              <ActionIcon
-                                icon={Plus}
-                                size="small"
-                                onClick={handleAddCustomTag}
-                                disabled={!newTagInput.trim()}
-                                title="新增標籤"
-                              />
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="doc-tags">
-                            {doc.tags?.length ? (
-                              doc.tags.map((tag) => (
-                                <Tag
-                                  key={`${doc.id}-${tag}`}
+                              <div className="tag-section">
+                                <div className="tag-section-title">功能標籤</div>
+                                <div className="tag-selector">
+                                  {functionTags.map((tag) => (
+                                    <button
+                                      key={tag}
+                                      type="button"
+                                      className={`tag-option${(doc.tags || []).includes(tag) ? ' is-selected' : ''}`}
+                                      onClick={() => handleToggleTag(doc.id, tag)}
+                                    >
+                                      <Tag size="small" color={tagColors[tag] || 'default'}>
+                                        {tag}
+                                      </Tag>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {customTags.length > 0 && (
+                                <div className="tag-section">
+                                  <div className="tag-section-title">自定義標籤</div>
+                                  <div className="tag-selector">
+                                    {customTags.map((tag) => (
+                                      <button
+                                        key={tag}
+                                        type="button"
+                                        className={`tag-option${(doc.tags || []).includes(tag) ? ' is-selected' : ''}`}
+                                        onClick={() => handleToggleTag(doc.id, tag)}
+                                      >
+                                        <Tag size="small" color="purple">
+                                          {tag}
+                                        </Tag>
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              <div className="tag-add">
+                                <input
+                                  type="text"
+                                  className="tag-input"
+                                  placeholder="新增自定義標籤..."
+                                  value={newTagInput}
+                                  onChange={(e) => setNewTagInput(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      handleAddCustomTag();
+                                    }
+                                  }}
+                                />
+                                <ActionIcon
+                                  icon={Plus}
                                   size="small"
-                                  color={tagColors[tag] || (customTags.includes(tag) ? 'purple' : 'default')}
-                                >
-                                  {tag}
-                                </Tag>
-                              ))
-                            ) : (
-                              <span className="doc-empty">點擊 ✏️ 編輯標籤</span>
-                            )}
-                          </div>
-                        )}
-
-                        {doc.status === 'error' ? (
-                          <div className="doc-empty">解析失敗</div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-
-          </section>
-
-          <section className="panel artifact-panel">
-            <div className="panel-header">
-              <div>
-                <Text as="h2" weight="600" className="panel-title">
-                  解析作業區
-                </Text>
-              </div>
-              <div className="panel-actions">
-                {activeTab === 'memo' ? (
-                  <Button type="primary" onClick={handleDownloadOutput}>
-                    匯出報告
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="artifact-stack">
-              <div className="preview-card">
-                <div className="card-head">
-                  <div>
-                    <Text as="h3" weight="600" className="card-title">
-                      文件內容
-                    </Text>
-                  </div>
-                </div>
-
-                <div className="preview-canvas">
-                  {activeTab === 'documents' ? (
-                    <div className="preview-documents">
-                      {(() => {
-                        const selectedDoc = documents.find((doc) => doc.id === selectedDocId);
-                        if (!selectedDoc) {
-                          return <div className="doc-empty">尚未選擇文件</div>;
-                        }
-                        return (
-                          <>
-                            <div className="doc-preview-header">
-                              <Icon icon={FileText} size="small" />
-                              <span className="doc-preview-name">{selectedDoc.name}</span>
-                              <Tag size="small" color="blue">{selectedDoc.type}</Tag>
-                              <span className="doc-preview-meta">{selectedDoc.pages} 頁</span>
+                                  onClick={handleAddCustomTag}
+                                  disabled={!newTagInput.trim()}
+                                  title="新增標籤"
+                                />
+                              </div>
                             </div>
-                            {selectedDoc.tags && selectedDoc.tags.length > 0 && (
-                              <div className="doc-preview-tags">
-                                {selectedDoc.tags.map((tag) => (
+                          ) : (
+                            <div className="doc-tags">
+                              {doc.tags?.length ? (
+                                doc.tags.map((tag) => (
                                   <Tag
-                                    key={tag}
+                                    key={`${doc.id}-${tag}`}
                                     size="small"
                                     color={tagColors[tag] || (customTags.includes(tag) ? 'purple' : 'default')}
                                   >
                                     {tag}
                                   </Tag>
-                                ))}
-                              </div>
-                            )}
-                            <div className="doc-preview-content-full">
-                              {selectedDoc.image ? (
-                                <img
-                                  src={selectedDoc.image}
-                                  alt={selectedDoc.name}
-                                  className="doc-preview-image"
-                                />
-                              ) : selectedDoc.content ? (
-                                <pre className="doc-preview-text">{selectedDoc.content}</pre>
+                                ))
                               ) : (
-                                <div className="no-preview-full">
-                                  <Icon icon={FileText} size="large" />
-                                  <p>無文字預覽內容</p>
-                                  <p className="no-preview-hint">
-                                    此 PDF 文件已索引，可透過 RAG 檢索內容
-                                  </p>
-                                </div>
+                                <span className="doc-empty">點擊 ✏️ 編輯標籤</span>
                               )}
                             </div>
-                          </>
-                        );
-                      })()}
-                    </div>
-                  ) : (
-                    <div className="live-markdown">
-                      {isLoading && streamingContent ? (
-                        <div className="streaming-wrapper">
-                          <div className="streaming-label">正在產生中...</div>
-                          <div className="streaming-content">
-                            <pre className="streaming-text">{streamingContent}</pre>
-                            <span className="streaming-cursor">▊</span>
-                          </div>
-                        </div>
-                      ) : (
-                        renderMarkdown(activeArtifact?.output || '')
-                      )}
-                    </div>
-                  )}
+                          )}
 
-                  {activeTab === 'translation' ? (
-                    <div className="preview-translation">
-                      {filteredTranslations.length > 1 && (
-                        <div className="translation-tabs">
-                          {filteredTranslations.map((trans, index) => (
-                            <button
-                              key={trans.id}
-                              type="button"
-                              className={`translation-tab${index === activeTranslationIndex ? ' is-active' : ''}`}
-                              onClick={() => setActiveTranslationIndex(index)}
-                            >
-                              {trans.title}
-                            </button>
-                          ))}
+                          {doc.status === 'error' ? (
+                            <div className="doc-empty">解析失敗</div>
+                          ) : null}
                         </div>
-                      )}
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
 
-                      <div className="translation-list">
-                        {(activeArtifact.clauses || []).map((pair) => (
-                          <div key={pair.id || pair.section} className="translation-block">
-                            <div className="translation-label">{pair.section}</div>
-                            <div className="translation-columns">
-                              <div className="translation-col">
-                                <div className="translation-caption">原文</div>
-                                <p>{pair.source}</p>
-                              </div>
-                              <div className="translation-col">
-                                <div className="translation-caption">英文</div>
-                                <p>{pair.translated}</p>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+            </section>
+
+            <section className="panel artifact-panel">
+              <div className="panel-header">
+                <div>
+                  <Text as="h2" weight="600" className="panel-title">
+                    解析作業區
+                  </Text>
+                </div>
+                <div className="panel-actions">
+                  {activeTab === 'memo' ? (
+                    <Button type="primary" onClick={handleDownloadOutput}>
+                      匯出報告
+                    </Button>
                   ) : null}
                 </div>
               </div>
-            </div>
-          </section>
 
-          <section className="panel chat-panel">
-            <div className="panel-header">
-              <div>
-                <Text as="h2" weight="600" className="panel-title">
-                  新聞檢索
-                </Text>
-              </div>
-              <div className="panel-actions">
-                <Tag size="small" variant="borderless">
-                  案件: {caseId}
-                </Tag>
-                
-              </div>
-            </div>
-
-            <div className="chat-stream">
-              {messages.map((message, index) => (
-                <div
-                  key={message.id}
-                  className={`message ${
-                    message.role === 'user' ? 'is-user' : 'is-assistant'
-                  }`}
-                  style={{ '--delay': `${index * 120}ms` }}
-                >
-                  <div className="message-avatar">
-                    {message.role === 'user' ? 'User' : 'AI'}
-                  </div>
-                  <div className="message-bubble">
-                    <div className="message-meta">
-                      <span className="message-name">{message.name}</span>
-                      <span className="message-time">{message.time}</span>
+              <div className="artifact-stack">
+                <div className="preview-card">
+                  <div className="card-head">
+                    <div>
+                      <Text as="h3" weight="600" className="card-title">
+                        文件內容
+                      </Text>
                     </div>
-                    <p className="message-text">{message.content}</p>
-                    {message.bullets ? (
-                      <ul className="message-list">
-                        {message.bullets.map((item) => (
-                          <li key={item}>{item}</li>
-                        ))}
-                      </ul>
-                    ) : null}
-                    {message.attachment ? (
-                      <div className="message-attachment">
-                        <div className="attachment-title">
-                          {message.attachment.title}
-                        </div>
-                        <div className="attachment-detail">
-                          {message.attachment.detail}
-                        </div>
+                  </div>
+
+                  <div className="preview-canvas">
+                    {activeTab === 'documents' ? (
+                      <div className="preview-documents">
+                        {(() => {
+                          const selectedDoc = documents.find((doc) => doc.id === selectedDocId);
+                          if (!selectedDoc) {
+                            return <div className="doc-empty">尚未選擇文件</div>;
+                          }
+                          return (
+                            <>
+                              <div className="doc-preview-header">
+                                <Icon icon={FileText} size="small" />
+                                <span className="doc-preview-name">{selectedDoc.name}</span>
+                                <Tag size="small" color="blue">{selectedDoc.type}</Tag>
+                                <span className="doc-preview-meta">{selectedDoc.pages} 頁</span>
+                              </div>
+                              {selectedDoc.tags && selectedDoc.tags.length > 0 && (
+                                <div className="doc-preview-tags">
+                                  {selectedDoc.tags.map((tag) => (
+                                    <Tag
+                                      key={tag}
+                                      size="small"
+                                      color={tagColors[tag] || (customTags.includes(tag) ? 'purple' : 'default')}
+                                    >
+                                      {tag}
+                                    </Tag>
+                                  ))}
+                                </div>
+                              )}
+                              <div className="doc-preview-content-full">
+                                {selectedDoc.image ? (
+                                  <img
+                                    src={selectedDoc.image}
+                                    alt={selectedDoc.name}
+                                    className="doc-preview-image"
+                                  />
+                                ) : selectedDoc.content ? (
+                                  <pre className="doc-preview-text">{selectedDoc.content}</pre>
+                                ) : (
+                                  <div className="no-preview-full">
+                                    <Icon icon={FileText} size="large" />
+                                    <p>無文字預覽內容</p>
+                                    <p className="no-preview-hint">
+                                      此 PDF 文件已索引，可透過 RAG 檢索內容
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                            </>
+                          );
+                        })()}
                       </div>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-              
-              {/* 流式內容顯示 */}
-              {isLoading && streamingContent && (
-                <div className="message is-assistant is-streaming">
-                  <div className="message-avatar">AI</div>
-                  <div className="message-bubble">
-                    <div className="message-meta">
-                      <span className="message-name">助理</span>
-                      <span className="message-time">{nowTime()}</span>
-                    </div>
-                    <div className="streaming-content">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {streamingContent}
-                      </ReactMarkdown>
-                      <span className="typing-cursor">▋</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="routing-panel">
-              <div className="routing-header">
-                <div className="tray-title">
-                  <Icon icon={ListChecks} size="small" />
-                  <span>任務路由</span>
-                </div>
-              </div>
-              
-              {/* 顯示預定義的任務階段 */}
-              <div className="routing-stages">
-                {predefinedStages.map((stage, index) => {
-                  const isCompleted = completedStages.includes(stage.id);
-                  const isCurrent = currentStage === stage.id;
-                  const isPending = !isCompleted && !isCurrent;
-                  
-                  return (
-                    <div 
-                      key={stage.id} 
-                      className={`routing-stage ${
-                        isCompleted ? 'is-completed' : 
-                        isCurrent ? 'is-current' : 
-                        'is-pending'
-                      }`}
-                    >
-                      <div className="stage-indicator">
-                        <div className="stage-number">{stage.order}</div>
-                        {index < predefinedStages.length - 1 && (
-                          <div className="stage-connector"></div>
+                    ) : (
+                      <div className="live-markdown">
+                        {isLoading && streamingContent ? (
+                          <div className="streaming-wrapper">
+                            <div className="streaming-label">正在產生中...</div>
+                            <div className="streaming-content">
+                              <pre className="streaming-text">{streamingContent}</pre>
+                              <span className="streaming-cursor">▊</span>
+                            </div>
+                          </div>
+                        ) : (
+                          renderMarkdown(activeArtifact?.output || '')
                         )}
                       </div>
-                      <div className="stage-label">{stage.label}</div>
-                    </div>
-                  );
-                })}
-              </div>
-              
-              {/* 處理日誌區域（固定高度） */}
-              {reasoningSummary ? (
-                <div className="routing-reasoning">
-                  
-                  <div className="routing-reasoning-text" ref={logContainerRef}>{reasoningSummary}</div>
+                    )}
+
+                    {activeTab === 'translation' ? (
+                      <div className="preview-translation">
+                        {filteredTranslations.length > 1 && (
+                          <div className="translation-tabs">
+                            {filteredTranslations.map((trans, index) => (
+                              <button
+                                key={trans.id}
+                                type="button"
+                                className={`translation-tab${index === activeTranslationIndex ? ' is-active' : ''}`}
+                                onClick={() => setActiveTranslationIndex(index)}
+                              >
+                                {trans.title}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="translation-list">
+                          {(activeArtifact.clauses || []).map((pair) => (
+                            <div key={pair.id || pair.section} className="translation-block">
+                              <div className="translation-label">{pair.section}</div>
+                              <div className="translation-columns">
+                                <div className="translation-col">
+                                  <div className="translation-caption">原文</div>
+                                  <p>{pair.source}</p>
+                                </div>
+                                <div className="translation-col">
+                                  <div className="translation-caption">英文</div>
+                                  <p>{pair.translated}</p>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
-              ) : null}
-            </div>
-
-            <div className="chat-composer">
-              <TextArea
-                rows={3}
-                value={composerText}
-                onChange={(event) => setComposerText(event.target.value)}
-                onKeyDown={(event) => {
-                  const isComposing =
-                    event.isComposing || (event.nativeEvent && event.nativeEvent.isComposing);
-                  if (isComposing) return;
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    handleSend();
-                  }
-                }}
-                placeholder="輸入問題，例如：最近有哪些關於越南的經濟新聞？"
-              />
-              {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
-              <div className="composer-actions">
-                
-                <Button icon={ArrowUpRight} type="primary" onClick={handleSend} disabled={isLoading}>
-                  {isLoading ? '產生中...' : '送出指示'}
-                </Button>
               </div>
-            </div>
-          </section>
-        </div>
-        
-        {/* 匯出彈窗 */}
-        {showExportModal && (
-          <div 
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000
-          }}
-          onClick={() => setShowExportModal(false)}
-        >
-          <div 
-            style={{
-              backgroundColor: 'white',
-              borderRadius: '8px',
-              padding: '24px',
-              minWidth: '400px',
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <Text as="h3" weight="600" style={{ marginBottom: '16px' }}>
-              匯出並寄送新聞報告
-            </Text>
-            {currentDocForExport && (
-              <Text size="small" style={{ color: '#6c757d', marginBottom: '16px' }}>
-                文件：{currentDocForExport.name}
-              </Text>
-            )}
-            <div style={{ marginBottom: '16px' }}>
-              <Text size="small" weight="500" style={{ marginBottom: '8px', display: 'block' }}>
-                收件人郵箱
-              </Text>
-              <input
-                type="email"
-                value={recipientEmail}
-                onChange={(e) => setRecipientEmail(e.target.value)}
-                placeholder="請輸入收件人郵箱地址"
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  border: '1px solid #d9d9d9',
-                  borderRadius: '4px',
-                  fontSize: '14px'
-                }}
-              />
-            </div>
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <Button
-                variant="outlined"
-                onClick={() => {
-                  setShowExportModal(false);
-                  setRecipientEmail('');
-                }}
-                disabled={isExporting}
-              >
-                取消
-              </Button>
-              <Button
-                type="primary"
-                onClick={handleExportAndSend}
-                disabled={isExporting || !recipientEmail.trim()}
-              >
-                {isExporting ? '處理中...' : '寄送'}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+            </section>
 
-      {/* 批次匯出彈窗 */}
-      {showBatchExportModal && (
-        <div 
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000
-          }}
-          onClick={() => setShowBatchExportModal(false)}
-        >
-          <div 
-            style={{
-              backgroundColor: 'white',
-              borderRadius: '8px',
-              padding: '24px',
-              minWidth: '450px',
-              maxWidth: '600px',
-              maxHeight: '80vh',
-              overflow: 'auto',
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <Text as="h3" weight="600" style={{ marginBottom: '16px' }}>
-              批次匯出新聞報告
-            </Text>
-            <div style={{ marginBottom: '16px' }}>
-              <Text size="small" weight="500" style={{ marginBottom: '8px', display: 'block' }}>
-                已選擇 {selectedNewsIds.length} 筆新聞
-              </Text>
-              <div style={{ 
-                maxHeight: '150px', 
-                overflow: 'auto', 
-                padding: '12px', 
-                backgroundColor: '#f5f5f5', 
-                borderRadius: '4px',
-                fontSize: '13px'
-              }}>
-                {documents
-                  .filter(doc => selectedNewsIds.includes(doc.id))
-                  .map(doc => (
-                    <div key={doc.id} style={{ padding: '4px 0' }}>
-                      ✓ {doc.name}
+            <section className="panel chat-panel">
+              <div className="panel-header">
+                <div>
+                  <Text as="h2" weight="600" className="panel-title">
+                    新聞檢索
+                  </Text>
+                </div>
+                <div className="panel-actions">
+                  <Tag size="small" variant="borderless">
+                    案件: {caseId}
+                  </Tag>
+
+                </div>
+              </div>
+
+              <div className="chat-stream">
+                {messages.map((message, index) => (
+                  <div
+                    key={message.id}
+                    className={`message ${message.role === 'user' ? 'is-user' : 'is-assistant'
+                      }`}
+                    style={{ '--delay': `${index * 120}ms` }}
+                  >
+                    <div className="message-avatar">
+                      {message.role === 'user' ? 'User' : 'AI'}
                     </div>
-                  ))
-                }
+                    <div className="message-bubble">
+                      <div className="message-meta">
+                        <span className="message-name">{message.name}</span>
+                        <span className="message-time">{message.time}</span>
+                      </div>
+                      <p className="message-text">{message.content}</p>
+                      {message.bullets ? (
+                        <ul className="message-list">
+                          {message.bullets.map((item) => (
+                            <li key={item}>{item}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {message.attachment ? (
+                        <div className="message-attachment">
+                          <div className="attachment-title">
+                            {message.attachment.title}
+                          </div>
+                          <div className="attachment-detail">
+                            {message.attachment.detail}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+
+                {/* 流式內容顯示 */}
+                {isLoading && streamingContent && (
+                  <div className="message is-assistant is-streaming">
+                    <div className="message-avatar">AI</div>
+                    <div className="message-bubble">
+                      <div className="message-meta">
+                        <span className="message-name">助理</span>
+                        <span className="message-time">{nowTime()}</span>
+                      </div>
+                      <div className="streaming-content">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {streamingContent}
+                        </ReactMarkdown>
+                        <span className="typing-cursor">▋</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="routing-panel">
+                <div className="routing-header">
+                  <div className="tray-title">
+                    <Icon icon={ListChecks} size="small" />
+                    <span>任務路由</span>
+                  </div>
+                </div>
+
+                {/* 顯示預定義的任務階段 */}
+                <div className="routing-stages">
+                  {predefinedStages.map((stage, index) => {
+                    const isCompleted = completedStages.includes(stage.id);
+                    const isCurrent = currentStage === stage.id;
+                    const isPending = !isCompleted && !isCurrent;
+
+                    return (
+                      <div
+                        key={stage.id}
+                        className={`routing-stage ${isCompleted ? 'is-completed' :
+                            isCurrent ? 'is-current' :
+                              'is-pending'
+                          }`}
+                      >
+                        <div className="stage-indicator">
+                          <div className="stage-number">{stage.order}</div>
+                          {index < predefinedStages.length - 1 && (
+                            <div className="stage-connector"></div>
+                          )}
+                        </div>
+                        <div className="stage-label">{stage.label}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* 處理日誌區域（固定高度） */}
+                {reasoningSummary ? (
+                  <div className="routing-reasoning">
+
+                    <div className="routing-reasoning-text" ref={logContainerRef}>{reasoningSummary}</div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="chat-composer">
+                <TextArea
+                  rows={3}
+                  value={composerText}
+                  onChange={(event) => setComposerText(event.target.value)}
+                  onKeyDown={(event) => {
+                    const isComposing =
+                      event.isComposing || (event.nativeEvent && event.nativeEvent.isComposing);
+                    if (isComposing) return;
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                      event.preventDefault();
+                      handleSend();
+                    }
+                  }}
+                  placeholder="輸入問題，例如：最近有哪些關於越南的經濟新聞？"
+                />
+                {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
+                <div className="composer-actions">
+
+                  <Button icon={ArrowUpRight} type="primary" onClick={handleSend} disabled={isLoading}>
+                    {isLoading ? '產生中...' : '送出指示'}
+                  </Button>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          {/* 匯出彈窗 */}
+          {showExportModal && (
+            <div
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 1000
+              }}
+              onClick={() => setShowExportModal(false)}
+            >
+              <div
+                style={{
+                  backgroundColor: 'white',
+                  borderRadius: '8px',
+                  padding: '24px',
+                  minWidth: '400px',
+                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Text as="h3" weight="600" style={{ marginBottom: '16px' }}>
+                  匯出並寄送新聞報告
+                </Text>
+                {currentDocForExport && (
+                  <Text size="small" style={{ color: '#6c757d', marginBottom: '16px' }}>
+                    文件：{currentDocForExport.name}
+                  </Text>
+                )}
+                <div style={{ marginBottom: '16px' }}>
+                  <Text size="small" weight="500" style={{ marginBottom: '8px', display: 'block' }}>
+                    收件人郵箱
+                  </Text>
+                  <input
+                    type="email"
+                    value={recipientEmail}
+                    onChange={(e) => setRecipientEmail(e.target.value)}
+                    placeholder="請輸入收件人郵箱地址"
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      border: '1px solid #d9d9d9',
+                      borderRadius: '4px',
+                      fontSize: '14px'
+                    }}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                  <Button
+                    variant="outlined"
+                    onClick={() => {
+                      setShowExportModal(false);
+                      setRecipientEmail('');
+                    }}
+                    disabled={isExporting}
+                  >
+                    取消
+                  </Button>
+                  <Button
+                    type="primary"
+                    onClick={handleExportAndSend}
+                    disabled={isExporting || !recipientEmail.trim()}
+                  >
+                    {isExporting ? '處理中...' : '寄送'}
+                  </Button>
+                </div>
               </div>
             </div>
-            <div style={{ marginBottom: '16px' }}>
-              <Text size="small" weight="500" style={{ marginBottom: '8px', display: 'block' }}>
-                收件人郵箱
-              </Text>
-              <input
-                type="email"
-                value={batchRecipientEmail}
-                onChange={(e) => setBatchRecipientEmail(e.target.value)}
-                placeholder="請輸入收件人郵箱地址"
+          )}
+
+          {/* 批次匯出彈窗 */}
+          {showBatchExportModal && (
+            <div
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 1000
+              }}
+              onClick={() => setShowBatchExportModal(false)}
+            >
+              <div
                 style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  border: '1px solid #d9d9d9',
-                  borderRadius: '4px',
-                  fontSize: '14px'
+                  backgroundColor: 'white',
+                  borderRadius: '8px',
+                  padding: '24px',
+                  minWidth: '450px',
+                  maxWidth: '600px',
+                  maxHeight: '80vh',
+                  overflow: 'auto',
+                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
                 }}
-              />
-            </div>
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <Button
-                variant="outlined"
-                onClick={() => {
-                  setShowBatchExportModal(false);
-                  setBatchRecipientEmail('');
-                }}
-                disabled={isBatchExporting}
+                onClick={(e) => e.stopPropagation()}
               >
-                取消
-              </Button>
-              <Button
-                type="primary"
-                onClick={handleBatchExportAndSend}
-                disabled={isBatchExporting || !batchRecipientEmail.trim()}
-              >
-                {isBatchExporting ? '處理中...' : '批次寄送'}
-              </Button>
+                <Text as="h3" weight="600" style={{ marginBottom: '16px' }}>
+                  批次匯出新聞報告
+                </Text>
+                <div style={{ marginBottom: '16px' }}>
+                  <Text size="small" weight="500" style={{ marginBottom: '8px', display: 'block' }}>
+                    已選擇 {selectedNewsIds.length} 筆新聞
+                  </Text>
+                  <div style={{
+                    maxHeight: '150px',
+                    overflow: 'auto',
+                    padding: '12px',
+                    backgroundColor: '#f5f5f5',
+                    borderRadius: '4px',
+                    fontSize: '13px'
+                  }}>
+                    {documents
+                      .filter(doc => selectedNewsIds.includes(doc.id))
+                      .map(doc => (
+                        <div key={doc.id} style={{ padding: '4px 0' }}>
+                          ✓ {doc.name}
+                        </div>
+                      ))
+                    }
+                  </div>
+                </div>
+                <div style={{ marginBottom: '16px' }}>
+                  <Text size="small" weight="500" style={{ marginBottom: '8px', display: 'block' }}>
+                    收件人郵箱
+                  </Text>
+                  <input
+                    type="email"
+                    value={batchRecipientEmail}
+                    onChange={(e) => setBatchRecipientEmail(e.target.value)}
+                    placeholder="請輸入收件人郵箱地址"
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      border: '1px solid #d9d9d9',
+                      borderRadius: '4px',
+                      fontSize: '14px'
+                    }}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                  <Button
+                    variant="outlined"
+                    onClick={() => {
+                      setShowBatchExportModal(false);
+                      setBatchRecipientEmail('');
+                    }}
+                    disabled={isBatchExporting}
+                  >
+                    取消
+                  </Button>
+                  <Button
+                    type="primary"
+                    onClick={handleBatchExportAndSend}
+                    disabled={isBatchExporting || !batchRecipientEmail.trim()}
+                  >
+                    {isBatchExporting ? '處理中...' : '批次寄送'}
+                  </Button>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </div>
-      )}
-      </div>
       )}
     </ThemeProvider>
   );

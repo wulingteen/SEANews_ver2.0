@@ -1774,11 +1774,22 @@ async def generate_artifacts(req: ArtifactRequest):
         use_vision = bool(route and route.needs_vision) or bool(image_inputs)
         if req.stream:
             async def generate_sse():
+                import time
+                timings = {
+                    "request_start": time.time(),
+                    "team_built": None,
+                    "first_event": None,
+                    "web_search_start": None,
+                    "web_search_end": None,
+                    "first_content": None,
+                    "done": None,
+                }
                 accumulated = ""
                 routing_state: Dict[str, str] = {}
                 routing_log: List[Dict[str, str]] = []
                 ocr_updates: List[Dict[str, Any]] = []
                 reasoning_fragments: List[str] = []
+
                 try:
                     if image_inputs:
                         ocr_start = {
@@ -1813,9 +1824,12 @@ async def generate_artifacts(req: ArtifactRequest):
                         enable_web_search=use_web_search,
                         enable_vision=use_vision,
                     )
+                    timings["team_built"] = time.time()
+                    print(f"⏱️ [計時] Team 建立完成: {timings['team_built'] - timings['request_start']:.2f}s")
 
                     if use_web_search:
                         team.tool_choice = WEB_SEARCH_TOOL
+
 
                     doc_context = build_doc_context(
                         req.documents,
@@ -1877,13 +1891,41 @@ async def generate_artifacts(req: ArtifactRequest):
 
                         trace_event = map_event_to_trace_event(event)
                         if trace_event:
-                            yield f"data: {json.dumps({'trace_event': trace_event})}\n\n"
+                            # 記錄 web_search 時間
+                            if trace_event.get("tool") == "web_search":
+                                if trace_event.get("type") == "tool_call" and not timings["web_search_start"]:
+                                    timings["web_search_start"] = time.time()
+                                    elapsed = timings["web_search_start"] - timings["request_start"]
+                                    print(f"⏱️ [計時] Web Search 開始: {elapsed:.2f}s")
+                                elif trace_event.get("type") != "tool_call" and not timings["web_search_end"]:
+                                    timings["web_search_end"] = time.time()
+                                    search_duration = timings["web_search_end"] - (timings["web_search_start"] or timings["request_start"])
+                                    print(f"⏱️ [計時] Web Search 完成: 耗時 {search_duration:.2f}s")
+                                
+                                search_status = "running" if trace_event.get("type") == "tool_call" else "done"
+                                search_label = trace_event.get("message", "網頁搜尋中...")
+                                web_search_update = {
+                                    "id": "web-search",
+                                    "label": search_label,
+                                    "status": search_status,
+                                    "eta": "搜尋進行中" if search_status == "running" else "完成",
+                                    "stage": "searching" if search_status == "running" else "complete",
+                                }
+                                yield f"data: {json.dumps({'routing_update': web_search_update})}\n\n"
+                            else:
+                                yield f"data: {json.dumps({'trace_event': trace_event})}\n\n"
 
                         content = extract_stream_text(event)
                         if not content:
                             continue
+                        # 記錄第一個內容時間
+                        if not timings["first_content"]:
+                            timings["first_content"] = time.time()
+                            elapsed = timings["first_content"] - timings["request_start"]
+                            print(f"⏱️ [計時] 首次內容輸出: {elapsed:.2f}s")
                         accumulated += content
                         yield f"data: {json.dumps({'chunk': content})}\n\n"
+
 
                     run_done = {
                         "id": "run-main",
@@ -1919,7 +1961,28 @@ async def generate_artifacts(req: ArtifactRequest):
                 except Exception as exc:
                     error_response = build_empty_response(f"處理過程中發生錯誤：{str(exc)}")
                     yield f"data: {json.dumps(error_response)}\n\n"
+                
+                # 輸出計時總結
+                timings["done"] = time.time()
+                total_time = timings["done"] - timings["request_start"]
+                print("\n" + "="*60)
+                print("⏱️ [計時總結]")
+                print("="*60)
+                if timings["team_built"]:
+                    print(f"  Team 建立:    {timings['team_built'] - timings['request_start']:.2f}s")
+                if timings["web_search_start"]:
+                    ws_start = timings["web_search_start"] - timings["request_start"]
+                    print(f"  Web Search 開始: {ws_start:.2f}s")
+                if timings["web_search_end"] and timings["web_search_start"]:
+                    ws_duration = timings["web_search_end"] - timings["web_search_start"]
+                    print(f"  Web Search 耗時: {ws_duration:.2f}s ⚠️")
+                if timings["first_content"]:
+                    print(f"  首次內容:     {timings['first_content'] - timings['request_start']:.2f}s")
+                print(f"  總耗時:       {total_time:.2f}s")
+                print("="*60 + "\n")
+                
                 yield f"data: {json.dumps({'done': True})}\n\n"
+
 
             return StreamingResponse(
                 generate_sse(),

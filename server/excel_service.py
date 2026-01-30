@@ -14,61 +14,64 @@ from openai import OpenAI
 
 def extract_country_from_content(content: str, fallback_name: str = "") -> str:
     """
-    使用 LLM 從文章內容中判斷國家
+    從文章內容中判斷國家（使用規則式 URL 網域匹配，不使用 LLM）
     
     Args:
         content: 文章內容
-        fallback_name: 備用的文件名稱（當 LLM 無法判斷時使用）
+        fallback_name: 備用的文件名稱
         
     Returns:
         國家名稱（中文）
     """
-    try:
-        # 獲取 OpenAI API Key
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            return extract_country_from_name(fallback_name)
-        
-        client = OpenAI(api_key=api_key)
-        
-        # 截取文章前 1000 字符進行分析（節省 token）
-        content_sample = content[:1000] if len(content) > 1000 else content
-        
-        prompt = f"""請分析以下新聞內容，判斷這篇新聞主要涉及哪個東南亞國家。
-
-新聞內容：
-{content_sample}
-
-請只回答以下其中一個國家名稱（中文）：越南、泰國、印尼、菲律賓、柬埔寨、新加坡、馬來西亞、緬甸、寮國、東南亞（如果涉及多國）
-
-如果無法判斷或不屬於東南亞新聞，請回答「其他」。
-只需回答國家名稱，不要有其他文字。"""
-        
-        response = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_completion_tokens=20
-        )
-        
-        country = response.choices[0].message.content.strip()
-        print(f"LLM 國家判斷結果: {country}")
-        
-        # 驗證回答是否為有效的國家名稱
-        valid_countries = ['越南', '泰國', '印尼', '菲律賓', '柬埔寨', '新加坡', '馬來西亞', '緬甸', '寮國', '東南亞', '其他']
-        if country in valid_countries:
-            return country
-        else:
-            # 如果 LLM 回答不在預期範圍內，使用文件名判斷
-            print(f"LLM 回答 '{country}' 不在有效範圍內，使用文件名判斷")
-            return extract_country_from_name(fallback_name)
-            
-    except Exception as e:
-        import traceback
-        print(f"LLM 國家判斷失敗: {e}")
-        print(f"錯誤詳情: {traceback.format_exc()}")
-        print(f"使用文件名稱判斷: {fallback_name}")
-        return extract_country_from_name(fallback_name)
+    # 區域英文轉中文映射
+    region_to_chinese = {
+        'Vietnam': '越南',
+        'Thailand': '泰國',
+        'Singapore': '新加坡',
+        'Philippines': '菲律賓',
+        'Cambodia': '柬埔寨',
+        'Indonesia': '印尼',
+        'Malaysia': '馬來西亞',
+        'Myanmar': '緬甸',
+        'Laos': '寮國',
+        'Southeast Asia': '東南亞',
+    }
+    
+    # 網域到國家的映射（從 TRUSTED_NEWS_SOURCES 提取）
+    domain_to_country = {
+        'viet-jo.com': '越南',
+        'cafef.vn': '越南',
+        'vnexpress.net': '越南',
+        'vietnamfinance.vn': '越南',
+        'vir.com.vn': '越南',
+        'vietnambiz.vn': '越南',
+        'tapchikinhtetaichinh.vn': '越南',
+        'bangkokpost.com': '泰國',
+        'techsauce.co': '泰國',
+        'fintechnews.sg': '新加坡',
+        'fintechnews.ph': '菲律賓',
+        'khmertimeskh.com': '柬埔寨',
+        'cc-times.com': '柬埔寨',
+        'phnompenhpost.com': '柬埔寨',
+        'dealstreetasia.com': '東南亞',
+        'techinasia.com': '東南亞',
+        'asia.nikkei.com': '東南亞',
+        'heaptalk.com': '東南亞',
+    }
+    
+    # 嘗試從內容中的 URL 提取國家
+    import re
+    url_pattern = r'https?://(?:www\.)?([a-zA-Z0-9.-]+)'
+    urls = re.findall(url_pattern, content)
+    
+    for url_domain in urls:
+        # 檢查是否匹配任何已知網域
+        for domain, country in domain_to_country.items():
+            if domain in url_domain:
+                return country
+    
+    # 如果沒找到 URL，使用文件名稱判斷（原有邏輯）
+    return extract_country_from_name(fallback_name)
 
 
 def extract_country_from_name(name: str) -> str:
@@ -127,35 +130,92 @@ def translate_title_to_chinese(title: str) -> str:
     if chinese_chars / len(title) > 0.3:
         return title
     
+    # 使用批次翻譯函數處理單個標題
+    results = batch_translate_titles([title])
+    return results.get(title, title)
+
+
+def batch_translate_titles(titles: List[str]) -> Dict[str, str]:
+    """
+    批次翻譯多個新聞標題為繁體中文（單次 API 呼叫）
+    
+    Args:
+        titles: 原始標題列表
+        
+    Returns:
+        字典 {原始標題: 翻譯後標題}
+    """
+    if not titles:
+        return {}
+    
+    # 過濾已經是中文的標題
+    titles_to_translate = []
+    result = {}
+    
+    for title in titles:
+        if not title:
+            result[title] = title
+            continue
+        chinese_chars = sum(1 for char in title if '\u4e00' <= char <= '\u9fff')
+        if len(title) > 0 and chinese_chars / len(title) > 0.3:
+            result[title] = title  # 已經是中文，不需翻譯
+        else:
+            titles_to_translate.append(title)
+    
+    # 如果所有標題都是中文，直接返回
+    if not titles_to_translate:
+        return result
+    
     try:
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            return title
+            # 沒有 API key，返回原始標題
+            for title in titles_to_translate:
+                result[title] = title
+            return result
         
         client = OpenAI(api_key=api_key)
         
-        prompt = f"""請將以下新聞標題翻譯成繁體中文。只需回答翻譯結果，不要有其他說明。
+        # 構建批次翻譯提示
+        numbered_titles = "\n".join([f"{i+1}. {t}" for i, t in enumerate(titles_to_translate)])
+        
+        prompt = f"""請將以下新聞標題翻譯成繁體中文。每行一個標題，保持編號對應。只需回答翻譯結果，不要有其他說明。
 
-原標題：{title}
+原標題列表：
+{numbered_titles}
 
-繁體中文翻譯："""
+繁體中文翻譯（保持編號格式）："""
         
         response = client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_completion_tokens=100
+            max_completion_tokens=500
         )
         
-        translated = response.choices[0].message.content.strip()
-        print(f"標題翻譯: {title[:30]}... -> {translated[:30]}...")
-        return translated if translated else title
+        translated_text = response.choices[0].message.content.strip()
+        print(f"📝 批次翻譯完成: {len(titles_to_translate)} 個標題")
+        
+        # 解析翻譯結果
+        lines = translated_text.split("\n")
+        for i, title in enumerate(titles_to_translate):
+            if i < len(lines):
+                # 移除編號前綴 (如 "1. ", "2. " 等)
+                translated = re.sub(r'^\d+\.\s*', '', lines[i]).strip()
+                result[title] = translated if translated else title
+            else:
+                result[title] = title
+        
+        return result
         
     except Exception as e:
         import traceback
-        print(f"標題翻譯失敗: {e}")
+        print(f"批次標題翻譯失敗: {e}")
         print(f"錯誤詳情: {traceback.format_exc()}")
-        return title
+        # 翻譯失敗時返回原始標題
+        for title in titles_to_translate:
+            result[title] = title
+        return result
 
 
 def parse_news_from_content(content: str) -> List[Dict[str, str]]:
@@ -172,12 +232,14 @@ def parse_news_from_content(content: str) -> List[Dict[str, str]]:
         新聞列表，每個元素包含 title, date, summary, link
     """
     news_items = []
+    original_titles = []  # 收集所有原始標題
     
     # 檢測是否為單篇新聞文檔（以 # 標題開頭，包含發布時間和來源）
     if content.strip().startswith('# ') and '**發布時間**' in content and '**來源**' in content:
         # 單篇新聞格式
         news_item = {
             'title': '',
+            'original_title': '',  # 暫存原始標題
             'date': '',
             'summary': '',
             'link': ''
@@ -188,8 +250,8 @@ def parse_news_from_content(content: str) -> List[Dict[str, str]]:
         # 提取標題（第一行，去掉 # 符號）
         if lines:
             original_title = lines[0].replace('#', '').strip()
-            # 翻譯標題為繁體中文
-            news_item['title'] = translate_title_to_chinese(original_title)
+            news_item['original_title'] = original_title
+            original_titles.append(original_title)
         
         # 提取發布時間
         date_pattern = r'\*\*發布時間\*\*[：:]\s*(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日]?)'
@@ -225,92 +287,99 @@ def parse_news_from_content(content: str) -> List[Dict[str, str]]:
         
         news_item['summary'] = summary_text[:500] if summary_text else ''
         
-        if news_item['title'] and news_item['summary']:
+        if news_item['original_title'] and news_item['summary']:
             news_items.append(news_item)
+    else:
+        # 原有的多篇新聞列表解析邏輯（RESEARCH 類型）
+        # 先移除文末的總結區塊
+        summary_section_pattern = r'\n##\s+(摘要|期間重點|覆蓋度|缺口|後續建議|Credit Memo).*$'
+        content = re.sub(summary_section_pattern, '', content, flags=re.DOTALL)
         
-        return news_items
+        # 按 ### 標題分割新聞項目
+        sections = re.split(r'\n###\s+', content)
+        
+        for section in sections:
+            section = section.strip()
+            if not section or len(section) < 20:
+                continue
+            
+            # 跳過非新聞標題
+            first_line = section.split('\n')[0].strip()
+            if any(keyword in first_line for keyword in ['回覆重點', '越南', '泰國', '印尼', '菲律賓', '柬埔寨', 'Vietnam', 'Thailand', 'Indonesia', 'Philippines', 'Cambodia']):
+                continue
+            if first_line.startswith('#') or first_line.startswith('【'):
+                continue
+            
+            news_item = {
+                'title': '',
+                'original_title': '',  # 暫存原始標題
+                'date': '',
+                'summary': '',
+                'link': ''
+            }
+            
+            # 提取標題（第一行）
+            lines = section.split('\n')
+            if lines:
+                original_title = lines[0].strip()
+                news_item['original_title'] = original_title
+                original_titles.append(original_title)
+            
+            # 提取發布時間
+            date_pattern = r'發布時間[：:]\s*(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日]?)'
+            date_match = re.search(date_pattern, section)
+            if date_match:
+                news_item['date'] = date_match.group(1).replace('年', '-').replace('月', '-').replace('日', '')
+            
+            # 提取連結
+            link_pattern = r'`(https?://[^`]+)`'
+            link_match = re.search(link_pattern, section)
+            if link_match:
+                news_item['link'] = link_match.group(1).strip()
+            else:
+                plain_link_match = re.search(r'(https?://[^\s\)]+)', section)
+                if plain_link_match:
+                    news_item['link'] = plain_link_match.group(1).strip()
+            
+            # 提取摘要
+            summary_text = section
+            if lines:
+                summary_text = '\n'.join(lines[1:])
+            # 移除發布時間（多種格式）
+            summary_text = re.sub(r'\*\*發布時間\*\*[：:][^\n]+\n*', '', summary_text)  # 粗體格式
+            summary_text = re.sub(r'發布時間[：:][^\n]+\n*', '', summary_text)  # 普通格式
+            summary_text = re.sub(r'\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日]?', '', summary_text)  # 移除日期格式
+            summary_text = re.sub(r'---+.*$', '', summary_text, flags=re.DOTALL)
+            # 移除所有類型的 URL
+            summary_text = re.sub(r'\[([^\]]*)\]\([^\)]*\)', r'\1', summary_text)  # Markdown 連結轉文字
+            summary_text = re.sub(r'\([^\)]*https?://[^\)]*\)', '', summary_text)  # 括號內的 URL
+            summary_text = re.sub(r'\[[^\]]*\]', '', summary_text)  # 移除剩餘的中括號
+            summary_text = re.sub(r'`https?://[^`]+`', '', summary_text)  # 反引號中的 URL
+            summary_text = re.sub(r'https?://[^\s\)\]]+', '', summary_text)  # 所有其他 URL
+            summary_text = re.sub(r'#+\s*', '', summary_text)
+            summary_text = re.sub(r'\(\s*\)', '', summary_text)  # 移除空括號
+            # 移除特殊標記符號
+            summary_text = re.sub(r'\*\*[^*]+\*\*[：:]?', '', summary_text)  # 移除粗體標記
+            summary_text = re.sub(r'[•·▪▸►▶]', '', summary_text)  # 移除列表符號
+            # 過濾非中英文字符（保留中文、英文、數字、常用標點）
+            summary_text = re.sub(r'[^\u4e00-\u9fff\u3000-\u303fa-zA-Z0-9\s，。！？、；：,.!?\'\"%-]', '', summary_text)
+            summary_text = re.sub(r'\n+', ' ', summary_text)
+            summary_text = re.sub(r'\s+', ' ', summary_text)
+            summary_text = summary_text.strip()
+            
+            news_item['summary'] = summary_text[:500] if summary_text else ''
+            
+            # 只有標題和摘要都存在時才加入列表
+            if news_item['original_title'] and news_item['summary']:
+                news_items.append(news_item)
     
-    # 原有的多篇新聞列表解析邏輯（RESEARCH 類型）
-    # 先移除文末的總結區塊
-    summary_section_pattern = r'\n##\s+(摘要|期間重點|覆蓋度|缺口|後續建議|Credit Memo).*$'
-    content = re.sub(summary_section_pattern, '', content, flags=re.DOTALL)
-    
-    # 按 ### 標題分割新聞項目
-    sections = re.split(r'\n###\s+', content)
-    
-    for section in sections:
-        section = section.strip()
-        if not section or len(section) < 20:
-            continue
-        
-        # 跳過非新聞標題
-        first_line = section.split('\n')[0].strip()
-        if any(keyword in first_line for keyword in ['回覆重點', '越南', '泰國', '印尼', '菲律賓', '柬埔寨', 'Vietnam', 'Thailand', 'Indonesia', 'Philippines', 'Cambodia']):
-            continue
-        if first_line.startswith('#') or first_line.startswith('【'):
-            continue
-        
-        news_item = {
-            'title': '',
-            'date': '',
-            'summary': '',
-            'link': ''
-        }
-        
-        # 提取標題（第一行）
-        lines = section.split('\n')
-        if lines:
-            original_title = lines[0].strip()
-            # 翻譯標題為繁體中文
-            news_item['title'] = translate_title_to_chinese(original_title)
-        
-        # 提取發布時間
-        date_pattern = r'發布時間[：:]\s*(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日]?)'
-        date_match = re.search(date_pattern, section)
-        if date_match:
-            news_item['date'] = date_match.group(1).replace('年', '-').replace('月', '-').replace('日', '')
-        
-        # 提取連結
-        link_pattern = r'`(https?://[^`]+)`'
-        link_match = re.search(link_pattern, section)
-        if link_match:
-            news_item['link'] = link_match.group(1).strip()
-        else:
-            plain_link_match = re.search(r'(https?://[^\s\)]+)', section)
-            if plain_link_match:
-                news_item['link'] = plain_link_match.group(1).strip()
-        
-        # 提取摘要
-        summary_text = section
-        if lines:
-            summary_text = '\n'.join(lines[1:])
-        # 移除發布時間（多種格式）
-        summary_text = re.sub(r'\*\*發布時間\*\*[：:][^\n]+\n*', '', summary_text)  # 粗體格式
-        summary_text = re.sub(r'發布時間[：:][^\n]+\n*', '', summary_text)  # 普通格式
-        summary_text = re.sub(r'\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日]?', '', summary_text)  # 移除日期格式
-        summary_text = re.sub(r'---+.*$', '', summary_text, flags=re.DOTALL)
-        # 移除所有類型的 URL
-        summary_text = re.sub(r'\[([^\]]*)\]\([^\)]*\)', r'\1', summary_text)  # Markdown 連結轉文字
-        summary_text = re.sub(r'\([^\)]*https?://[^\)]*\)', '', summary_text)  # 括號內的 URL
-        summary_text = re.sub(r'\[[^\]]*\]', '', summary_text)  # 移除剩餘的中括號
-        summary_text = re.sub(r'`https?://[^`]+`', '', summary_text)  # 反引號中的 URL
-        summary_text = re.sub(r'https?://[^\s\)\]]+', '', summary_text)  # 所有其他 URL
-        summary_text = re.sub(r'#+\s*', '', summary_text)
-        summary_text = re.sub(r'\(\s*\)', '', summary_text)  # 移除空括號
-        # 移除特殊標記符號
-        summary_text = re.sub(r'\*\*[^*]+\*\*[：:]?', '', summary_text)  # 移除粗體標記
-        summary_text = re.sub(r'[•·▪▸►▶]', '', summary_text)  # 移除列表符號
-        # 過濾非中英文字符（保留中文、英文、數字、常用標點）
-        summary_text = re.sub(r'[^\u4e00-\u9fff\u3000-\u303fa-zA-Z0-9\s，。！？、；：,.!?\'\"%-]', '', summary_text)
-        summary_text = re.sub(r'\n+', ' ', summary_text)
-        summary_text = re.sub(r'\s+', ' ', summary_text)
-        summary_text = summary_text.strip()
-        
-        news_item['summary'] = summary_text[:500] if summary_text else ''
-        
-        # 只有標題和摘要都存在時才加入列表
-        if news_item['title'] and news_item['summary']:
-            news_items.append(news_item)
+    # 批次翻譯所有標題（單次 API 呼叫）
+    if original_titles:
+        title_translations = batch_translate_titles(original_titles)
+        for item in news_items:
+            original = item.get('original_title', '')
+            item['title'] = title_translations.get(original, original)
+            del item['original_title']  # 移除暫存欄位
     
     return news_items
 

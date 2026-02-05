@@ -16,7 +16,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from agno.agent import Agent
 from agno.media import Image
@@ -98,13 +98,14 @@ TEAM_INSTRUCTIONS = [
     "若本次任務包含 OCR 文字，請在 summary.output 產出該文件的摘要。",
     "",
     "【新聞搜尋模式 - 輸出格式要求】",
+    "外層回覆必須是嚴格 JSON（不得有 code fence 或多餘說明）。",
     "當執行新聞搜尋時，assistant.content 必須包含 Markdown 格式的新聞列表，每則新聞包含：",
     "- 新聞標題（使用 ### 標記）",
     "- 發布時間（格式：YYYY-MM-DD 或 YYYY年MM月DD日）",
     "- 新聞摘要（1-2 段文字）",
     "- 新聞來源連結（完整 URL）",
     "",
-    "範例格式：",
+    "assistant.content 範例格式：",
     "### 越南央行宣布降息 0.5 個百分點",
     "發布時間：2025-12-28",
     "越南國家銀行（SBV）今日宣布將基準利率下調 0.5 個百分點至 4.5%，這是今年第三次降息。此舉旨在刺激經濟成長並支持企業融資。",
@@ -262,6 +263,84 @@ class ArtifactRequest(BaseModel):
     documents: List[Document] = Field(default_factory=list)
     stream: bool = False
     system_context: Optional[SystemContext] = None
+
+
+class AssistantPayload(BaseModel):
+    content: str = ""
+    bullets: List[str] = Field(default_factory=list)
+
+
+class BorrowerPayload(BaseModel):
+    name: str = ""
+    description: str = ""
+    rating: str = ""
+
+
+class SummaryMetric(BaseModel):
+    label: str = ""
+    value: str = ""
+    delta: str = ""
+
+
+class SummaryRisk(BaseModel):
+    label: str = ""
+    level: str = ""
+
+
+class SummaryPayload(BaseModel):
+    output: str = ""
+    borrower: Optional[BorrowerPayload] = None
+    metrics: List[SummaryMetric] = Field(default_factory=list)
+    risks: List[SummaryRisk] = Field(default_factory=list)
+    source_doc_id: str = ""
+    source_doc_ids: List[str] = Field(default_factory=list)
+    source_doc_name: str = ""
+    source_doc_names: List[str] = Field(default_factory=list)
+
+
+class TranslationClause(BaseModel):
+    section: str = ""
+    source: str = ""
+    translated: str = ""
+
+
+class TranslationPayload(BaseModel):
+    output: str = ""
+    clauses: List[TranslationClause] = Field(default_factory=list)
+    source_doc_id: str = ""
+    source_doc_ids: List[str] = Field(default_factory=list)
+    source_doc_name: str = ""
+    source_doc_names: List[str] = Field(default_factory=list)
+
+
+class MemoSection(BaseModel):
+    title: str = ""
+    detail: str = ""
+
+
+class MemoPayload(BaseModel):
+    output: str = ""
+    sections: List[MemoSection] = Field(default_factory=list)
+    recommendation: str = ""
+    conditions: str = ""
+
+
+class RoutingStep(BaseModel):
+    id: str = ""
+    label: str = ""
+    status: str = ""
+    eta: str = ""
+    stage: str = ""
+
+
+class ArtifactResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    assistant: AssistantPayload = Field(default_factory=AssistantPayload)
+    summary: SummaryPayload = Field(default_factory=SummaryPayload)
+    translation: TranslationPayload = Field(default_factory=TranslationPayload)
+    memo: MemoPayload = Field(default_factory=MemoPayload)
+    routing: List[RoutingStep] = Field(default_factory=list)
 
 
 class TagUpdateRequest(BaseModel):
@@ -612,6 +691,53 @@ def build_empty_response(message: str) -> Dict[str, Any]:
     }
 
 
+def normalize_response_payload(payload: Any) -> Dict[str, Any]:
+    """Ensure response payload conforms to expected artifact schema."""
+    base = build_empty_response("")
+    if not isinstance(payload, dict):
+        base["assistant"]["content"] = str(payload)
+        return base
+
+    # Assistant content
+    assistant = payload.get("assistant")
+    if isinstance(assistant, dict):
+        base["assistant"] = {
+            "content": assistant.get("content", ""),
+            "bullets": assistant.get("bullets") or [],
+        }
+    elif isinstance(assistant, str):
+        base["assistant"]["content"] = assistant
+    elif isinstance(payload.get("content"), str):
+        # Some agents return {"content": "..."}
+        base["assistant"]["content"] = payload.get("content", "")
+
+    # Summary / translation / memo
+    for key in ("summary", "translation", "memo"):
+        if isinstance(payload.get(key), dict):
+            base[key].update(payload[key])
+
+    # Routing
+    if isinstance(payload.get("routing"), list):
+        base["routing"] = payload["routing"]
+
+    # Preserve extra fields (documents_append, reasoning_summary, etc.)
+    for key, value in payload.items():
+        if key not in base:
+            base[key] = value
+
+    return base
+
+
+def extract_payload_from_response(response: Any) -> Dict[str, Any]:
+    content = getattr(response, "content", None)
+    if isinstance(content, BaseModel):
+        return normalize_response_payload(content.model_dump())
+    if isinstance(content, dict):
+        return normalize_response_payload(content)
+    text = response.get_content_as_string()
+    return normalize_response_payload(safe_parse_json(text))
+
+
 def compute_tag_key(data: bytes) -> str:
     return hashlib.md5(data).hexdigest()
 
@@ -928,12 +1054,14 @@ def build_news_documents(
     seen_keys: Optional[set] = None,
 ) -> List[Dict[str, Any]]:
     """將搜尋結果拆分成獨立的新聞文檔"""
-    if not use_web_search:
-        return []
-    
     assistant_content = (data.get("assistant") or {}).get("content") or ""
     if not assistant_content:
         return []
+
+    if not use_web_search:
+        # Allow parsing if the assistant content already looks like a news list
+        if "###" not in assistant_content:
+            return []
     
     # 解析新聞列表
     articles = parse_news_articles(assistant_content)
@@ -1456,6 +1584,7 @@ def build_research_agent() -> Agent:
         name="Deep Research Agent",
         role="東南亞新聞深度搜尋專員",
         model=model,
+        # Web search 工具不支援 JSON mode；此處避免強制 JSON mode
         instructions=[
             "你是東南亞新聞搜尋專員，負責使用 web_search 工具搜尋東南亞各國新聞。",
             "",
@@ -1482,8 +1611,8 @@ def build_research_agent() -> Agent:
             "❌ fintech site:google.com  (使用了非信任網域)",
             "❌ Singapore news  (沒有限定網域)",
             "",
-            "【輸出格式 - Markdown 新聞列表】",
-            "你必須回傳嚴格 JSON（由 Team Leader 統一格式），其中 assistant.content 需是 Markdown 新聞列表。",
+            "【輸出格式 - JSON 外層 + Markdown 內文】",
+            "你必須回傳嚴格 JSON（不得有 code fence 或多餘說明），其中 assistant.content 需是 Markdown 新聞列表。",
             "assistant.content 的每則新聞包含：",
             "- 標題（使用 ### 標記）",
             "- 發布時間（格式：YYYY-MM-DD 或 YYYY年MM月DD日）",
@@ -1491,7 +1620,7 @@ def build_research_agent() -> Agent:
             "- 新聞來源連結（完整 URL）",
             "- 每則新聞之間用空行分隔",
             "",
-            "範例輸出：",
+            "assistant.content 範例：",
             "### 越南央行宣布降息 0.5 個百分點",
             "發布時間：2025-12-28",
             "越南國家銀行（SBV）今日宣布將基準利率下調 0.5 個百分點至 4.5%，這是今年第三次降息。此舉旨在刺激經濟成長並支持企業融資。",
@@ -1546,6 +1675,8 @@ def build_team(
         model=model,
         instructions=TEAM_INSTRUCTIONS,
         expected_output=EXPECTED_OUTPUT,
+        # Web search 工具不支援 JSON mode；僅在非 web search 模式強制結構化輸出
+        output_schema=None if enable_web_search else ArtifactResponse,
         tools=[WEB_SEARCH_TOOL] if enable_web_search else [],
         add_member_tools_to_context=True,
         add_name_to_context=True,
@@ -1953,6 +2084,7 @@ async def generate_artifacts(req: ArtifactRequest):
                 accumulated = ""
                 assistant_content_len = 0
                 streamed_news_keys: Set[str] = set()
+                final_payload: Optional[Dict[str, Any]] = None
                 routing_state: Dict[str, str] = {}
                 routing_log: List[Dict[str, str]] = []
                 ocr_updates: List[Dict[str, Any]] = []
@@ -2064,6 +2196,15 @@ async def generate_artifacts(req: ArtifactRequest):
                             print(log_line)
                             yield f"data: {json.dumps({'log_chunk': log_line})}\n\n"
 
+                        # Capture structured payloads when available (JSON output schema)
+                        payload = getattr(event, "content", None)
+                        if isinstance(payload, BaseModel):
+                            payload = payload.model_dump()
+                        if isinstance(payload, dict) and any(
+                            key in payload for key in ("assistant", "summary", "translation", "memo")
+                        ):
+                            final_payload = normalize_response_payload(payload)
+
                         # 提取推理過程（如果有）
                         reasoning_text = extract_reasoning_text(event)
                         if reasoning_text:
@@ -2111,9 +2252,16 @@ async def generate_artifacts(req: ArtifactRequest):
 
                         if use_web_search:
                             assistant_content = extract_assistant_content_from_json(accumulated)
-                            if assistant_content and len(assistant_content) > assistant_content_len:
-                                assistant_content_len = len(assistant_content)
-                                articles = parse_news_articles_streaming(assistant_content)
+                            source_for_parse = ""
+                            if assistant_content:
+                                source_for_parse = assistant_content
+                            elif "###" in accumulated:
+                                # Direct research output might be plain Markdown (non-JSON)
+                                source_for_parse = accumulated
+
+                            if source_for_parse and len(source_for_parse) > assistant_content_len:
+                                assistant_content_len = len(source_for_parse)
+                                articles = parse_news_articles_streaming(source_for_parse)
                                 new_docs = build_news_records_from_articles(
                                     articles,
                                     seen_keys=streamed_news_keys,
@@ -2132,8 +2280,22 @@ async def generate_artifacts(req: ArtifactRequest):
                         yield f"data: {json.dumps({'routing_update': run_done})}\n\n"
 
                     # Parse and send final complete message
-                    if accumulated:
-                        final_data = safe_parse_json(accumulated)
+                    if accumulated or final_payload:
+                        if accumulated:
+                            final_data = normalize_response_payload(safe_parse_json(accumulated))
+                        else:
+                            final_data = final_payload or build_empty_response("")
+                        assistant_content = (final_data.get("assistant") or {}).get("content", "").strip()
+                        if not assistant_content:
+                            # Try to recover assistant.content from raw stream or use raw markdown
+                            recovered = extract_assistant_content_from_json(accumulated)
+                            if not recovered and "###" in accumulated:
+                                recovered = accumulated.strip()
+                            if recovered:
+                                final_data["assistant"] = {
+                                    "content": recovered,
+                                    "bullets": [],
+                                }
                         if routing_log:
                             final_data["routing"] = routing_log
                         if ocr_updates:
@@ -2216,8 +2378,7 @@ async def generate_artifacts(req: ArtifactRequest):
                 add_dependencies_to_context=True,
                 images=image_inputs if image_inputs else None,
             )
-            text = response.get_content_as_string()
-            data: Dict[str, Any] = safe_parse_json(text)
+            data: Dict[str, Any] = extract_payload_from_response(response)
             # Attach reasoning summary if available on the response object
             reasoning_payload = getattr(response, "reasoning", None)
             reasoning_summary = ""

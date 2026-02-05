@@ -50,6 +50,46 @@ const nowTime = () =>
     minute: '2-digit',
   });
 
+const newsSearchKeywords = [
+  '新聞',
+  'news',
+  '搜尋',
+  '查詢',
+  '找',
+  '最新',
+  '最近',
+];
+
+const docContextKeywords = [
+  '文件',
+  '檔案',
+  'pdf',
+  '附件',
+  '上傳',
+  '這份',
+  '這個文件',
+  '這個檔',
+  '依據文件',
+  '根據文件',
+];
+
+const isLikelyNewsSearch = (text = '') => {
+  const lower = text.toLowerCase();
+  return newsSearchKeywords.some((keyword) => lower.includes(keyword));
+};
+
+const needsDocumentContext = (text = '') => {
+  const lower = text.toLowerCase();
+  return docContextKeywords.some((keyword) => lower.includes(keyword));
+};
+
+const buildDocumentsPayload = (documents, userText) => {
+  if (!isLikelyNewsSearch(userText) || needsDocumentContext(userText)) {
+    return documents;
+  }
+  return [];
+};
+
 // Estimate pages based on content length (roughly 3000 chars per page)
 const estimatePages = (content) => {
   if (!content) return '-';
@@ -991,6 +1031,7 @@ export default function App() {
         selected_doc_id: selectedDocId || null,
         selected_doc_name: documents.find((doc) => doc.id === selectedDocId)?.name || null,
       };
+      const documentsPayload = buildDocumentsPayload(documents, trimmed);
 
       const response = await fetch(`${apiBase}/api/artifacts`, {
         method: 'POST',
@@ -1000,7 +1041,7 @@ export default function App() {
             role: item.role,
             content: item.content,
           })),
-          documents,
+          documents: documentsPayload,
           stream: true,
           system_context: systemContext,
         }),
@@ -1014,6 +1055,32 @@ export default function App() {
       const contentType = response.headers.get('content-type') || '';
       let data = null;
       let hasRoutingUpdates = false;
+
+      const appendDocuments = (docsToAppend) => {
+        if (!Array.isArray(docsToAppend) || docsToAppend.length === 0) return;
+        const appendedDocs = docsToAppend.map((doc) => ({
+          id: doc.id || createId(),
+          name: doc.name || '未命名',
+          type: doc.type || 'NEWS',
+          pages: doc.pages ?? '-',
+          tags: Array.isArray(doc.tags) ? doc.tags : [],
+          content: doc.content || doc.preview || '',
+          image: doc.image || '',
+          image_mime: doc.image_mime || '',
+          tag_key: doc.tag_key || doc.id,
+          status: doc.status || 'indexed',
+          message: doc.message || '',
+          source: doc.source || 'news',
+          publish_date: doc.publish_date || '',
+          url: doc.url || '',
+        }));
+
+        setDocuments((prev) => {
+          const existingIds = new Set(prev.map((doc) => doc.id));
+          const uniqueDocs = appendedDocs.filter((doc) => !existingIds.has(doc.id));
+          return uniqueDocs.length > 0 ? [...uniqueDocs, ...prev] : prev;
+        });
+      };
 
       const applyRoutingUpdate = (update) => {
         if (!update || !update.id) return;
@@ -1100,6 +1167,11 @@ export default function App() {
                 continue;
               }
 
+              if (parsed.documents_append) {
+                appendDocuments(parsed.documents_append);
+                continue;
+              }
+
               // [UX Fix] Handle log chunks to show real-time progress
               if (parsed.log_chunk) {
                 setReasoningSummary((prev) => {
@@ -1183,28 +1255,7 @@ export default function App() {
       }
 
       if (Array.isArray(data.documents_append) && data.documents_append.length > 0) {
-        const appendedDocs = data.documents_append.map((doc) => ({
-          id: doc.id || createId(),
-          name: doc.name || '未命名',
-          type: doc.type || 'NEWS',
-          pages: doc.pages ?? '-',
-          tags: Array.isArray(doc.tags) ? doc.tags : [],
-          content: doc.content || doc.preview || '',
-          image: doc.image || '',
-          image_mime: doc.image_mime || '',
-          tag_key: doc.tag_key || doc.id,
-          status: doc.status || 'indexed',
-          message: doc.message || '',
-          source: doc.source || 'news',
-          publish_date: doc.publish_date || '',
-          url: doc.url || '',
-        }));
-
-        setDocuments((prev) => {
-          const existingIds = new Set(prev.map((doc) => doc.id));
-          const uniqueDocs = appendedDocs.filter((doc) => !existingIds.has(doc.id));
-          return uniqueDocs.length > 0 ? [...uniqueDocs, ...prev] : prev;
-        });
+        appendDocuments(data.documents_append);
       }
 
       // Update artifacts

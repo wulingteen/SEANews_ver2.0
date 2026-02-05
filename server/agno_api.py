@@ -1483,7 +1483,8 @@ def build_research_agent() -> Agent:
             "❌ Singapore news  (沒有限定網域)",
             "",
             "【輸出格式 - Markdown 新聞列表】",
-            "必須以 Markdown 格式輸出，每則新聞包含：",
+            "你必須回傳嚴格 JSON（由 Team Leader 統一格式），其中 assistant.content 需是 Markdown 新聞列表。",
+            "assistant.content 的每則新聞包含：",
             "- 標題（使用 ### 標記）",
             "- 發布時間（格式：YYYY-MM-DD 或 YYYY年MM月DD日）",
             "- 新聞摘要（1-3 段簡潔說明）",
@@ -1502,7 +1503,7 @@ def build_research_agent() -> Agent:
             "https://bangkokpost.com/business/example-url",
             "",
             "【重要提醒】",
-            "- 必須輸出 Markdown 格式，不要使用 JSON",
+            "- 回覆外層必須是嚴格 JSON（不要輸出 code fence 或額外說明），但 assistant.content 內文需是 Markdown 新聞列表",
             "- 每則新聞都要包含完整的 URL 連結",
             "- 絕對不可省略 site: 語法",
             "- 驗證每個結果的網域是否在信任清單中",
@@ -1511,7 +1512,7 @@ def build_research_agent() -> Agent:
         tools=[WEB_SEARCH_TOOL],
         search_knowledge=True,
         add_knowledge_to_context=True,
-        markdown=True,  # 啟用 Markdown 輸出
+        markdown=False,  # 外層需輸出 JSON；Markdown 內容放在 assistant.content
     )
 
 
@@ -1986,16 +1987,30 @@ async def generate_artifacts(req: ArtifactRequest):
                     #     if doc.id and doc.id in rag_store.docs
                     # ]
 
-                    team = build_team(
-                        doc_ids,
-                        enable_web_search=use_web_search,
-                        enable_vision=use_vision,
-                    )
-                    timings["team_built"] = time.time()
-                    print(f"⏱️ [計時] Team 建立完成: {timings['team_built'] - timings['request_start']:.2f}s")
+
+                    runner = None
+                    if use_web_search and not use_vision:
+                        # 優化：直接使用 Research Agent，跳過 Team Leader 推理以節省時間
+                        print(f"⚡ [優化] 直接使用 Research Agent (跳過 Team Leader)")
+                        runner = build_research_agent()
+                        timings["team_built"] = time.time()
+                    else:
+                        runner = build_team(
+                            doc_ids,
+                            enable_web_search=use_web_search,
+                            enable_vision=use_vision,
+                        )
+                        timings["team_built"] = time.time()
+                    
+                    print(f"⏱️ [計時] Runner 建立完成: {timings['team_built'] - timings['request_start']:.2f}s")
 
                     if use_web_search:
-                        team.tool_choice = WEB_SEARCH_TOOL
+                         # 確保 Research Agent 也有這個屬性
+                         if hasattr(runner, 'tool_choice'):
+                             runner.tool_choice = WEB_SEARCH_TOOL
+                         else :
+                             # Agent 對象可能不直接支持 tool_choice，取決於 Agno 版本，但我們先保留邏輯
+                             pass
 
 
                     doc_context = build_doc_context(
@@ -2014,7 +2029,7 @@ async def generate_artifacts(req: ArtifactRequest):
                     if update_routing_log(routing_log, run_start):
                         yield f"data: {json.dumps({'routing_update': run_start})}\n\n"
 
-                    response = team.run(
+                    response = runner.run(
                         prompt,
                         # dependencies={"doc_ids": doc_ids},  # RAG 已停用
                         # add_dependencies_to_context=True,

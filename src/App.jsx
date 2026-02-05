@@ -1169,7 +1169,10 @@ export default function App() {
 
               if (parsed.documents_append) {
                 appendDocuments(parsed.documents_append);
-                continue;
+                // If this is the final payload, don't swallow it.
+                if (!(parsed.assistant || parsed.summary || parsed.translation || parsed.memo)) {
+                  continue;
+                }
               }
 
               // [UX Fix] Handle log chunks to show real-time progress

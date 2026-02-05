@@ -9,6 +9,9 @@ dist/
 .venv/
 __pycache__/
 .vite/
+server/exports/
+server/*.db
+server/*.db.bak
 
 # 允许提交 .env.example 和 .env.production（模板文件）
 !.env.example

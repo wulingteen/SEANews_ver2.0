@@ -5,10 +5,11 @@ import os
 import uuid
 import time
 import secrets
+import threading
 from datetime import datetime, timedelta
 from mimetypes import guess_type
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Union, Literal
+from typing import Any, Dict, Iterator, List, Optional, Union, Literal, Set
 
 import dotenv
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -33,7 +34,7 @@ from excel_service import (
     generate_news_excel, 
     generate_batch_news_excel, 
     cleanup_old_exports,
-    translate_title_to_chinese,
+    batch_translate_titles,
     extract_country_from_content
 )
 from news_store import news_store
@@ -325,6 +326,10 @@ DEFAULT_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "medium")
 # 啟用推理摘要以顯示 LLM 思考過程（GPT-5.2 支持）
 DEFAULT_REASONING_SUMMARY = os.getenv("OPENAI_REASONING_SUMMARY", "auto").strip()
 USE_RESPONSES_MODEL = os.getenv("OPENAI_USE_RESPONSES", "1").lower() in {"1", "true", "yes", "on"}
+# 索引新聞/研究結果到 RAG 會觸發大量 embedding API 呼叫，對搜尋速度影響極大
+# 預設關閉，如需後續 RAG 檢索請在環境變數中啟用
+INDEX_WEB_SEARCH_DOCS = os.getenv("AGNO_INDEX_WEB_SEARCH_DOCS", "0").lower() in {"1", "true", "yes", "on"}
+_RAG_INDEX_LOCK = threading.Lock()
 
 
 def get_model(
@@ -423,22 +428,29 @@ def build_system_status(
     return "\n".join(lines)
 
 
-def build_doc_context(documents: List[Document], selected_doc_id: Optional[str] = None) -> str:
+def build_doc_context(
+    documents: List[Document],
+    selected_doc_id: Optional[str] = None,
+    include_content: bool = True,
+) -> str:
     if not documents:
         return "文件清單: 無。"
 
     lines = []
     for idx, doc in enumerate(documents, start=1):
-        content = (doc.content or "").strip()
         tags = "、".join(doc.tags or []) if doc.tags else "無"
         pages = doc.pages if doc.pages not in (None, "") else "-"
-        stored = get_rag_store().docs.get(doc.id or "") if doc.id else None
-        if not content and stored and stored.preview:
-            content = f"PDF 已索引（可 RAG 檢索）。預覽：{stored.preview}"
-        if doc.image:
-            safe_content = "影像檔，無文字摘要。"
+        if include_content:
+            content = (doc.content or "").strip()
+            stored = get_rag_store().docs.get(doc.id or "") if doc.id else None
+            if not content and stored and stored.preview:
+                content = f"PDF 已索引（可 RAG 檢索）。預覽：{stored.preview}"
+            if doc.image:
+                safe_content = "影像檔，無文字摘要。"
+            else:
+                safe_content = content[:2000] if content else "未提供"
         else:
-            safe_content = content[:2000] if content else "未提供"
+            safe_content = "內容已省略（搜尋模式）"
         image_hint = "   影像: 已提供（可用 Vision Agent 解析）" if doc.image else None
         selected_mark = " (目前選取)" if selected_doc_id and doc.id == selected_doc_id else ""
         lines.append(
@@ -485,6 +497,22 @@ def build_image_inputs(documents: List[Document]) -> List[Image]:
             )
         )
     return images
+
+
+def index_rag_async(doc_id: str, name: str, content: str, doc_type: str) -> None:
+    if not INDEX_WEB_SEARCH_DOCS:
+        return
+
+    store = get_rag_store()
+
+    def _task():
+        try:
+            with _RAG_INDEX_LOCK:
+                store.index_inline_text(doc_id, name, content, doc_type)
+        except Exception as exc:
+            print(f"[WARN] RAG 索引失敗: {doc_type} {name}: {exc}")
+
+    threading.Thread(target=_task, daemon=True).start()
 
 
 def run_ocr_for_documents(documents: List[Document]) -> List[Dict[str, Any]]:
@@ -594,62 +622,244 @@ def estimate_pages(content: str) -> int:
     return max(1, (len(content) + 2999) // 3000)
 
 
+def parse_news_section(section: str) -> Optional[Dict[str, str]]:
+    import re
+
+    if not section.strip():
+        return None
+
+    lines = section.strip().split('\n')
+    if len(lines) < 2:
+        return None
+
+    title = lines[0].strip()
+    article_content = '\n'.join(lines[1:]).strip()
+
+    # 過濾掉系統信息：檢查標題是否包含系統相關關鍵詞
+    system_keywords = ['案件', 'CASE', '會話', '檢索', 'ID', '編號', '系統', '助理', '我是', '我可以']
+    if any(keyword in title for keyword in system_keywords):
+        return None
+
+    # 提取發布時間
+    publish_date = ""
+    date_match = re.search(r'發布時間[：:]\s*(\d{4}[-年]\d{1,2}[-月]\d{1,2}日?)', article_content)
+    if date_match:
+        publish_date = date_match.group(1)
+
+    # 提取 URL
+    url = ""
+    url_match = re.search(r'https?://[^\s\)]+', article_content)
+    if url_match:
+        url = url_match.group(0)
+
+    # 驗證是否為有效新聞：必須有 URL 或發布時間
+    if not url and not publish_date:
+        return None
+
+    # 驗證標題長度（太短或太長都可能不是新聞標題）
+    if len(title) < 5 or len(title) > 200:
+        return None
+
+    # 驗證內容長度（太短可能不是完整新聞）
+    if len(article_content) < 30:
+        return None
+
+    return {
+        'title': title,
+        'content': article_content,
+        'publish_date': publish_date,
+        'url': url
+    }
+
+
 def parse_news_articles(content: str) -> List[Dict[str, str]]:
     """解析新聞內容，返回獨立新聞列表"""
     import re
-    
-    articles = []
+
+    articles: List[Dict[str, str]] = []
     # 使用 ### 作為新聞分隔符
     sections = re.split(r'\n###\s+', content)
-    
+
     for section in sections:
-        if not section.strip():
-            continue
-            
-        lines = section.strip().split('\n')
-        if len(lines) < 2:
-            continue
-            
-        title = lines[0].strip()
-        article_content = '\n'.join(lines[1:]).strip()
-        
-        # 過濾掉系統信息：檢查標題是否包含系統相關關鍵詞
-        system_keywords = ['案件', 'CASE', '會話', '檢索', 'ID', '編號', '系統', '助理', '我是', '我可以']
-        if any(keyword in title for keyword in system_keywords):
-            continue
-        
-        # 提取發布時間
-        publish_date = ""
-        date_match = re.search(r'發布時間[：:]\s*(\d{4}[-年]\d{1,2}[-月]\d{1,2}日?)', article_content)
-        if date_match:
-            publish_date = date_match.group(1)
-        
-        # 提取 URL
-        url = ""
-        url_match = re.search(r'https?://[^\s\)]+', article_content)
-        if url_match:
-            url = url_match.group(0)
-        
-        # 驗證是否為有效新聞：必須有 URL 或發布時間
-        if not url and not publish_date:
-            continue
-        
-        # 驗證標題長度（太短或太長都可能不是新聞標題）
-        if len(title) < 5 or len(title) > 200:
-            continue
-        
-        # 驗證內容長度（太短可能不是完整新聞）
-        if len(article_content) < 30:
-            continue
-        
-        articles.append({
-            'title': title,
-            'content': article_content,
-            'publish_date': publish_date,
-            'url': url
-        })
-    
+        article = parse_news_section(section)
+        if article:
+            articles.append(article)
+
     return articles
+
+
+def parse_news_articles_streaming(content: str) -> List[Dict[str, str]]:
+    """流式解析：只回傳已完成的新聞（排除最後一段未結束的 section）"""
+    import re
+
+    sections = re.split(r'\n###\s+', content)
+    if len(sections) <= 2:
+        return []
+
+    complete_sections = sections[:-1]
+    articles: List[Dict[str, str]] = []
+    for section in complete_sections:
+        article = parse_news_section(section)
+        if article:
+            articles.append(article)
+    return articles
+
+
+def extract_assistant_content_from_json(raw: str) -> str:
+    """從尚未完成的 JSON 字串中解析 assistant.content（容錯、不阻塞）"""
+    if not raw:
+        return ""
+    idx = raw.find('"assistant"')
+    if idx == -1:
+        return ""
+    idx = raw.find('"content"', idx)
+    if idx == -1:
+        return ""
+    idx = raw.find(":", idx)
+    if idx == -1:
+        return ""
+    i = idx + 1
+    length = len(raw)
+    while i < length and raw[i] in " \t\r\n":
+        i += 1
+    if i >= length or raw[i] != '"':
+        return ""
+    i += 1
+    out: List[str] = []
+    while i < length:
+        ch = raw[i]
+        if ch == "\\":
+            if i + 1 >= length:
+                break
+            nxt = raw[i + 1]
+            if nxt in {'"', "\\", "/"}:
+                out.append(nxt)
+                i += 2
+                continue
+            if nxt == "n":
+                out.append("\n")
+                i += 2
+                continue
+            if nxt == "r":
+                out.append("\r")
+                i += 2
+                continue
+            if nxt == "t":
+                out.append("\t")
+                i += 2
+                continue
+            if nxt == "b":
+                out.append("\b")
+                i += 2
+                continue
+            if nxt == "f":
+                out.append("\f")
+                i += 2
+                continue
+            if nxt == "u" and i + 5 < length:
+                hex_str = raw[i + 2:i + 6]
+                try:
+                    out.append(chr(int(hex_str, 16)))
+                    i += 6
+                    continue
+                except Exception:
+                    pass
+            out.append(nxt)
+            i += 2
+            continue
+        if ch == '"':
+            break
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def make_news_key(article: Dict[str, str]) -> str:
+    title = (article.get("title") or "").strip()
+    publish_date = (article.get("publish_date") or "").strip()
+    url = (article.get("url") or "").strip()
+    if not title:
+        return ""
+    return f"{title.lower()}|{publish_date}|{url.lower()}"
+
+
+def make_news_doc_id(news_key: str) -> str:
+    digest = hashlib.md5(news_key.encode("utf-8")).hexdigest()
+    return f"news-{digest}"
+
+
+def build_news_records_from_articles(
+    articles: List[Dict[str, str]],
+    seen_keys: Optional[set] = None,
+) -> List[Dict[str, Any]]:
+    if not articles:
+        return []
+    seen = seen_keys if seen_keys is not None else set()
+    new_articles: List[Dict[str, str]] = []
+    new_keys: List[str] = []
+    for article in articles:
+        key = make_news_key(article)
+        if not key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        new_keys.append(key)
+        new_articles.append(article)
+
+    if not new_articles:
+        return []
+
+    titles = [article.get("title") for article in new_articles if article.get("title")]
+    unique_titles = list(dict.fromkeys(titles))
+    translations = batch_translate_titles(unique_titles) if unique_titles else {}
+
+    documents = []
+    for key, article in zip(new_keys, new_articles):
+        doc_id = make_news_doc_id(key)
+        original_title = article["title"]
+        content = article["content"]
+        publish_date = article["publish_date"]
+        url = article["url"]
+
+        title = translations.get(original_title, original_title)
+
+        # 組合完整內容用於國家判斷
+        full_content = f"# {title}\n\n"
+        if publish_date:
+            full_content += f"**發布時間**: {publish_date}\n\n"
+        full_content += content
+        if url:
+            full_content += f"\n\n**來源**: {url}"
+
+        # 判斷來源國家
+        country = extract_country_from_content(full_content, fallback_name=title)
+
+        # 索引到 RAG（背景執行，避免阻塞）
+        index_rag_async(doc_id, title, full_content, "NEWS")
+
+        # 創建文件記錄（使用翻譯後的標題）
+        document_record = {
+            "id": doc_id,
+            "name": title,  # 已翻譯的標題
+            "type": "NEWS",
+            "pages": estimate_pages(full_content),
+            "status": "indexed",
+            "message": "",
+            "preview": content[:300],
+            "content": full_content,
+            "source": "news",
+            "tags": [country] if country and country != " " else [],  # 將國家作為標籤
+            "country": country,  # 保存國家字段
+            "publish_date": publish_date,
+            "url": url,
+        }
+
+        # 保存到數據庫
+        news_store.add_record(document_record)
+        documents.append(document_record)
+
+    return documents
 
 
 def build_research_document(
@@ -689,7 +899,7 @@ def build_research_document(
     name = f"Deep Research - {title_hint or 'Research'}"
     doc_id = str(uuid.uuid4())
 
-    get_rag_store().index_inline_text(doc_id, name, combined, "RESEARCH")
+    index_rag_async(doc_id, name, combined, "RESEARCH")
 
     # 創建文件記錄
     document_record = {
@@ -715,6 +925,7 @@ def build_news_documents(
     data: Dict[str, Any],
     last_user: str,
     use_web_search: bool,
+    seen_keys: Optional[set] = None,
 ) -> List[Dict[str, Any]]:
     """將搜尋結果拆分成獨立的新聞文檔"""
     if not use_web_search:
@@ -729,54 +940,7 @@ def build_news_documents(
     if not articles:
         return []
     
-    documents = []
-    for article in articles:
-        doc_id = str(uuid.uuid4())
-        original_title = article['title']
-        content = article['content']
-        publish_date = article['publish_date']
-        url = article['url']
-        
-        # 翻譯標題為繁體中文
-        title = translate_title_to_chinese(original_title)
-        
-        # 組合完整內容用於國家判斷
-        full_content = f"# {title}\n\n"
-        if publish_date:
-            full_content += f"**發布時間**: {publish_date}\n\n"
-        full_content += content
-        if url:
-            full_content += f"\n\n**來源**: {url}"
-        
-        # 判斷來源國家
-        country = extract_country_from_content(full_content, fallback_name=title)
-        
-        # 索引到 RAG（使用翻譯後的標題）
-        get_rag_store().index_inline_text(doc_id, title, full_content, "NEWS")
-        
-        # 創建文件記錄（使用翻譯後的標題）
-        document_record = {
-            "id": doc_id,
-            "name": title,  # 已翻譯的標題
-            "type": "NEWS",
-            "pages": estimate_pages(full_content),
-            "status": "indexed",
-            "message": "",
-            "preview": content[:300],
-            "content": full_content,
-            "source": "news",
-            "tags": [country] if country and country != " " else [],  # 將國家作為標籤
-            "country": country,  # 保存國家字段
-            "publish_date": publish_date,
-            "url": url,
-            "country": country  # 保存判斷的國家
-        }
-        
-        # 保存到數據庫
-        news_store.add_record(document_record)
-        documents.append(document_record)
-    
-    return documents
+    return build_news_records_from_articles(articles, seen_keys=seen_keys)
 
 
 def build_smalltalk_agent(
@@ -1771,6 +1935,7 @@ async def generate_artifacts(req: ArtifactRequest):
         # Add system status to prompt for Team
         system_status = build_system_status(req.documents, req.system_context)
         use_web_search = bool(route and route.needs_web_search)
+        use_rag = bool(route and route.needs_rag)
         use_vision = bool(route and route.needs_vision) or bool(image_inputs)
         if req.stream:
             async def generate_sse():
@@ -1785,6 +1950,8 @@ async def generate_artifacts(req: ArtifactRequest):
                     "done": None,
                 }
                 accumulated = ""
+                assistant_content_len = 0
+                streamed_news_keys: Set[str] = set()
                 routing_state: Dict[str, str] = {}
                 routing_log: List[Dict[str, str]] = []
                 ocr_updates: List[Dict[str, Any]] = []
@@ -1834,6 +2001,7 @@ async def generate_artifacts(req: ArtifactRequest):
                     doc_context = build_doc_context(
                         req.documents,
                         req.system_context.selected_doc_id if req.system_context else None,
+                        include_content=not use_web_search or use_rag or use_vision,
                     )
                     prompt = f"{convo}\n\n{system_status}\n\n{doc_context}\n\n請依規則產出 JSON。"
 
@@ -1926,6 +2094,18 @@ async def generate_artifacts(req: ArtifactRequest):
                         accumulated += content
                         yield f"data: {json.dumps({'chunk': content})}\n\n"
 
+                        if use_web_search:
+                            assistant_content = extract_assistant_content_from_json(accumulated)
+                            if assistant_content and len(assistant_content) > assistant_content_len:
+                                assistant_content_len = len(assistant_content)
+                                articles = parse_news_articles_streaming(assistant_content)
+                                new_docs = build_news_records_from_articles(
+                                    articles,
+                                    seen_keys=streamed_news_keys,
+                                )
+                                if new_docs:
+                                    yield f"data: {json.dumps({'documents_append': new_docs})}\n\n"
+
 
                     run_done = {
                         "id": "run-main",
@@ -1950,9 +2130,11 @@ async def generate_artifacts(req: ArtifactRequest):
                             final_data,
                             last_user,
                             use_web_search,
+                            seen_keys=streamed_news_keys,
                         )
                         if news_docs:
-                            final_data["documents_append"] = news_docs
+                            existing_docs = final_data.get("documents_append") or []
+                            final_data["documents_append"] = existing_docs + news_docs
                         yield f"data: {json.dumps(final_data)}\n\n"
                     else:
                         # No content accumulated, send fallback response
@@ -2010,6 +2192,7 @@ async def generate_artifacts(req: ArtifactRequest):
             doc_context = build_doc_context(
                 req.documents,
                 req.system_context.selected_doc_id if req.system_context else None,
+                include_content=not use_web_search or use_rag or use_vision,
             )
             prompt = f"{convo}\n\n{system_status}\n\n{doc_context}\n\n請依規則產出 JSON。"
             response = team.run(

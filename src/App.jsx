@@ -216,6 +216,63 @@ const statusMeta = {
   done: { label: '完成', className: 'is-done' },
 };
 
+const routingStageSequence = ['analyze', 'search', 'process', 'complete'];
+const routingStageRank = routingStageSequence.reduce((acc, stage, index) => {
+  acc[stage] = index + 1;
+  return acc;
+}, {});
+
+const routingStageAlias = {
+  analysis: 'analyze',
+  analyzing: 'analyze',
+  searching: 'search',
+  processing: 'process',
+  completed: 'complete',
+};
+
+const completedStagesBefore = (currentStage) => {
+  const currentIndex = routingStageSequence.indexOf(currentStage);
+  if (currentIndex <= 0) return [];
+  return routingStageSequence.slice(0, currentIndex);
+};
+
+const normalizeRoutingStage = (rawStage = '', update = null) => {
+  const stageText = (rawStage || '').toString().trim().toLowerCase();
+  const normalizedStage = routingStageAlias[stageText] || stageText;
+  if (routingStageRank[normalizedStage]) {
+    return normalizedStage;
+  }
+
+  const idText = (update?.id || '').toString().toLowerCase();
+  const labelText = `${update?.label || ''} ${update?.eta || ''}`.toLowerCase();
+  const statusText = (update?.status || '').toString().toLowerCase();
+
+  if (idText === 'run-main') {
+    return statusText === 'done' ? 'process' : 'analyze';
+  }
+
+  if (
+    idText.includes('web-search') ||
+    idText.includes('tool') ||
+    labelText.includes('搜尋') ||
+    labelText.includes('查詢') ||
+    labelText.includes('檢索') ||
+    labelText.includes('search')
+  ) {
+    return 'search';
+  }
+
+  if (
+    idText.includes('content-processing') ||
+    labelText.includes('處理內容') ||
+    labelText.includes('儲存')
+  ) {
+    return 'process';
+  }
+
+  return '';
+};
+
 const normalizeRiskLevel = (level = '') => {
   const raw = level.toString();
   const lowered = raw.toLowerCase();
@@ -232,6 +289,7 @@ const normalizeRiskLevel = (level = '') => {
 export default function App() {
   // 登入狀態
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -263,6 +321,17 @@ export default function App() {
 
   // 日誌區域自動滾動
   const logContainerRef = useRef(null);
+  const stageProgressRef = useRef(0);
+
+  const applyStageProgress = (targetStage) => {
+    const normalizedStage = normalizeRoutingStage(targetStage);
+    if (!normalizedStage) return;
+    const targetRank = routingStageRank[normalizedStage] || 0;
+    if (targetRank === 0 || targetRank < stageProgressRef.current) return;
+    stageProgressRef.current = targetRank;
+    setCurrentStage(normalizedStage);
+    setCompletedStages(completedStagesBefore(normalizedStage));
+  };
 
   // Dynamic metadata states
   const [caseId] = useState(() => generateCaseId());
@@ -282,6 +351,39 @@ export default function App() {
   });
 
   const [activeTranslationIndex, setActiveTranslationIndex] = useState(0);
+
+  const resetWorkspaceState = ({ clearDocuments = false } = {}) => {
+    if (clearDocuments) {
+      setDocuments([]);
+      setSelectedDocId('');
+      setSelectedNewsIds([]);
+      setCustomTags([]);
+      setEditingDocId('');
+      setNewTagInput('');
+    }
+    setCurrentDocForExport(null);
+    setShowExportModal(false);
+    setShowBatchExportModal(false);
+    setRecipientEmail('');
+    setBatchRecipientEmail('');
+    setIsExporting(false);
+    setIsBatchExporting(false);
+    setMessages([]);
+    setRoutingSteps([]);
+    stageProgressRef.current = 0;
+    setCurrentStage('');
+    setCompletedStages([]);
+    setArtifacts({
+      summaries: [],
+      translations: [],
+      memo: { output: '', sections: [], recommendation: '', conditions: '' },
+    });
+    setActiveTranslationIndex(0);
+    setErrorMessage('');
+    setComposerText('');
+    setReasoningSummary('');
+    setStreamingContent('');
+  };
 
   // 登入處理
   const handleLogin = async (e) => {
@@ -314,20 +416,7 @@ export default function App() {
       if (data.success && data.token) {
         // 將token存儲到localStorage
         localStorage.setItem('authToken', data.token);
-
-        // 清空前端所有狀態（確保登入後是乾淨的）
-        console.log('🗑️ [登入] 清空前端狀態...');
-        setDocuments([]);
-        setMessages([]);
-        setArtifacts({
-          summaries: [],
-          translations: [],
-          memo: { output: '', sections: [], recommendation: '', conditions: '' },
-        });
-        setRoutingSteps([]);
-        setSelectedDocId('');
-        console.log('✅ [登入] 前端狀態已清空');
-
+        resetWorkspaceState({ clearDocuments: true });
         setIsAuthenticated(true);
         console.log('🔐 [登入] 登入成功');
       } else {
@@ -345,16 +434,59 @@ export default function App() {
     }
   };
 
-  // 自動驗證已存在的token（已停用 - 改為每次都需重新登入以確保資料乾淨）
+  // 驗證已存在的 token（有效則自動登入）
   useEffect(() => {
-    // 每次頁面載入時清除舊 token，強制重新登入
-    // 這樣可以確保每次開啟頁面都是乾淨的狀態
-    const token = localStorage.getItem('authToken');
-    if (token) {
-      console.log('🔄 [初始化] 清除舊 token，需要重新登入');
-      localStorage.removeItem('authToken');
-      setIsAuthenticated(false);
-    }
+    let isMounted = true;
+
+    const verifyStoredToken = async () => {
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        if (isMounted) {
+          setIsAuthenticated(false);
+          setIsAuthChecking(false);
+        }
+        return;
+      }
+
+      try {
+        const response = await fetch(`${apiBase || ''}/api/auth/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (!isMounted) return;
+
+        if (data.valid) {
+          setIsAuthenticated(true);
+          console.log('🔐 [初始化] token 驗證成功，自動登入');
+        } else {
+          localStorage.removeItem('authToken');
+          setIsAuthenticated(false);
+          console.log('🔐 [初始化] token 無效，請重新登入');
+        }
+      } catch (error) {
+        if (!isMounted) return;
+        console.warn('token 驗證失敗:', error);
+        localStorage.removeItem('authToken');
+        setIsAuthenticated(false);
+      } finally {
+        if (isMounted) {
+          setIsAuthChecking(false);
+        }
+      }
+    };
+
+    verifyStoredToken();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // 日誌自動滾動到底部
@@ -370,14 +502,6 @@ export default function App() {
 
     const loadNewsRecords = async () => {
       try {
-        // 每次頁面載入時先清空所有資料（確保乾淨狀態）
-        console.log('🗑️ [清空] 清空舊資料...');
-        await fetch(`${apiBase || ''}/api/auth/clear-data`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
-        console.log('✅ [清空] 資料已清空');
-
         const response = await fetch(`${apiBase || ''}/api/news/records`);
         if (response.ok) {
           const data = await response.json();
@@ -778,27 +902,37 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  // Create new case (reset all state)
-  const handleNewCase = () => {
-    const hasContent = messages.length > 0 || artifacts.summaries.length > 0 || artifacts.translations.length > 0 || artifacts.memo.output;
-    if (hasContent) {
-      if (!window.confirm('確定要新增案件嗎？目前的對話和產出將會清空。')) {
-        return;
-      }
+  // Create new case (explicit reset)
+  const handleNewCase = async () => {
+    const hasContent = messages.length > 0
+      || artifacts.summaries.length > 0
+      || artifacts.translations.length > 0
+      || artifacts.memo.output
+      || documents.length > 0;
+    if (hasContent && !window.confirm('確定要新增案件嗎？目前的對話和產出將會清空。')) {
+      return;
     }
-    setMessages([]);
-    setRoutingSteps([]);
-    setCurrentStage('');
-    setCompletedStages([]);
-    setArtifacts({
-      summaries: [],
-      translations: [],
-      memo: { output: '', sections: [], recommendation: '', conditions: '' },
-    });
-    setActiveTranslationIndex(0);
-    setErrorMessage('');
-    setComposerText('');
-    setReasoningSummary('');
+
+    try {
+      const response = await fetch(`${apiBase || ''}/api/auth/clear-data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok || (result && result.success === false)) {
+        throw new Error(result?.error || `HTTP error! status: ${response.status}`);
+      }
+
+      localStorage.removeItem('deletedDocIds');
+      resetWorkspaceState({ clearDocuments: true });
+    } catch (error) {
+      console.error('新增案件重置失敗:', error);
+      setErrorMessage(
+        error instanceof Error
+          ? `清空資料失敗: ${error.message}`
+          : '清空資料失敗，請稍後再試。'
+      );
+    }
   };
 
   // Export all artifacts as a package
@@ -1068,8 +1202,8 @@ export default function App() {
     setErrorMessage('');
     setStreamingContent('');
     setRoutingSteps([]);
-    setCurrentStage('analyze'); // 送出指示後立即顯示需求分析階段
-    setCompletedStages([]);
+    stageProgressRef.current = 0;
+    applyStageProgress('analyze');
     setReasoningSummary('');
 
     try {
@@ -1153,30 +1287,17 @@ export default function App() {
         });
 
         // 根據後端提供的 stage 標記更新階段
-        const stage = update.stage;
-        const status = update.status || '';
+        const stage = normalizeRoutingStage(update.stage, update);
+        const status = (update.status || '').toString().toLowerCase();
 
         console.log(`📊 [階段判斷] stage: "${stage}", status: "${status}"`);
 
-        // 使用後端明確標記的階段
+        if (stage === 'complete' && status !== 'done') {
+          return;
+        }
+
         if (stage) {
-          if (stage === 'analyze' && status === 'running') {
-            console.log('🎯 [階段追蹤] ✅ 需求分析階段 (TeamRunStarted)');
-            setCurrentStage('analyze');
-            setCompletedStages([]);
-          } else if (stage === 'search' && status === 'running') {
-            console.log('🎯 [階段追蹤] ✅ 搜尋資料階段 (TeamRunContent)');
-            setCurrentStage('search');
-            setCompletedStages(['analyze']);
-          } else if (stage === 'process') {
-            console.log('🎯 [階段追蹤] ✅ 處理內容階段 (TeamRunContentCompleted)');
-            setCurrentStage('process');
-            setCompletedStages(['analyze', 'search']);
-          } else if (stage === 'complete' && status === 'done') {
-            console.log('🎯 [階段追蹤] ✅ 完成階段 (TeamRunCompleted)');
-            setCurrentStage('complete');
-            setCompletedStages(['analyze', 'search', 'process']);
-          }
+          applyStageProgress(stage);
         }
       };
 
@@ -1256,9 +1377,7 @@ export default function App() {
 
               // Handle final complete data or done signal
               if (parsed.done) {
-                // 任務完成，標記所有階段為完成
-                setCurrentStage('complete');
-                setCompletedStages(['analyze', 'search', 'process', 'complete']);
+                applyStageProgress('complete');
                 continue;
               }
 
@@ -1436,9 +1555,7 @@ export default function App() {
             eta: step.eta || '完成',
           }))
         );
-        // 任務完成，標記所有階段為完成
-        setCurrentStage('complete');
-        setCompletedStages(['init', 'analyze', 'search', 'process', 'generate']);
+        applyStageProgress('complete');
       } else if (!hasRoutingUpdates) {
         setRoutingSteps([]);
       }
@@ -1455,9 +1572,7 @@ export default function App() {
 
       setMessages((prev) => [...prev, assistantMessage]);
 
-      // 標記所有階段為完成
-      setCurrentStage('complete');
-      setCompletedStages(['init', 'analyze', 'search', 'process', 'generate', 'complete']);
+      applyStageProgress('complete');
     } catch (error) {
       setErrorMessage(
         error instanceof Error
@@ -1465,6 +1580,7 @@ export default function App() {
           : '連線失敗，請稍後再試。'
       );
       // 錯誤時也重置進度
+      stageProgressRef.current = 0;
       setCurrentStage('');
       setCompletedStages([]);
     } finally {
@@ -1502,7 +1618,20 @@ export default function App() {
           <option key={email} value={email} />
         ))}
       </datalist>
-      {!isAuthenticated ? (
+      {isAuthChecking ? (
+        <div className="login-container">
+          <div className="login-box">
+            <div className="login-header">
+              <Text as="h2" weight="600" style={{ marginBottom: '8px' }}>
+                驗證登入狀態中...
+              </Text>
+              <Text style={{ color: 'var(--muted)' }}>
+                請稍候
+              </Text>
+            </div>
+          </div>
+        </div>
+      ) : !isAuthenticated ? (
         <div className="login-container">
           <div className="login-box">
             <div className="login-header">
@@ -1577,9 +1706,18 @@ export default function App() {
               <Button
                 size="small"
                 variant="outlined"
+                onClick={handleNewCase}
+              >
+                新增案件
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
                 onClick={() => {
                   localStorage.removeItem('authToken');
+                  resetWorkspaceState({ clearDocuments: true });
                   setIsAuthenticated(false);
+                  setIsAuthChecking(false);
                   setLoginUsername('');
                   setLoginPassword('');
                 }}

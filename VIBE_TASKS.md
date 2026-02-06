@@ -12,7 +12,7 @@ Last Updated: 2026-02-06
 
 | ID | Status | Task | Estimate | Depends On | Done Commit |
 |---|---|---|---|---|---|
-| VC-01 | TODO | Auth baseline refactor (remove forced relogin/clear-on-login behavior) | 4-6h | - | - |
+| VC-01 | DONE | Auth baseline refactor (remove forced relogin/clear-on-login behavior) | 4-6h | - | task(VC-01) |
 | VC-02 | TODO | Google OAuth login integration (frontend + backend token verify) | 6-10h | VC-01 | - |
 | VC-03 | TODO | Multi-user data isolation (news/tags/history by user_id) | 8-14h | VC-02 | - |
 | VC-04 | TODO | P0 UX fixes (no stacking, recent-by-default, max_results) | 6-10h | VC-01 | - |
@@ -54,4 +54,3 @@ Last Updated: 2026-02-06
   - `.env` keys documented and validated.
   - Google OAuth callback and origin settings documented.
   - Smoke checklist can be run in under 10 minutes.
-

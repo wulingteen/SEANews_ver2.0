@@ -1777,12 +1777,6 @@ async def login(request: LoginRequest):
         
         # 验证用户名和密码
         if request.username == valid_username and request.password == valid_password:
-            # 清空所有資料（單用戶模式：每次登入都是乾淨狀態）
-            print("[登入] 清空所有資料...")
-            news_store.clear_all_records()
-            clear_all_tags()
-            print("[登入] 資料清空完成")
-            
             # 生成会话令牌
             token = create_session_token()
             active_sessions[token] = datetime.now() + SESSION_TIMEOUT

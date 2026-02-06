@@ -18,6 +18,13 @@ from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict
 
+try:
+    from google.auth.transport import requests as google_auth_requests
+    from google.oauth2 import id_token as google_id_token
+except Exception:
+    google_auth_requests = None
+    google_id_token = None
+
 from agno.agent import Agent
 from agno.media import Image
 from agno.run.agent import RunEvent
@@ -355,14 +362,26 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class AuthUser(BaseModel):
+    id: str
+    provider: str
+    email: Optional[str] = None
+    name: Optional[str] = None
+
+
 class LoginResponse(BaseModel):
     success: bool
     token: Optional[str] = None
+    user: Optional[AuthUser] = None
     error: Optional[str] = None
 
 
+class GoogleLoginRequest(BaseModel):
+    credential: str
+
+
 # Simple in-memory session store (for production, use Redis or database)
-active_sessions: Dict[str, datetime] = {}
+active_sessions: Dict[str, Union[datetime, Dict[str, Any]]] = {}
 SESSION_TIMEOUT = timedelta(hours=24)
 
 
@@ -371,25 +390,97 @@ def create_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def create_session(
+    user: Optional[Dict[str, Optional[str]]] = None,
+) -> str:
+    """建立會話並儲存使用者資訊（兼容本地帳密與 Google 登入）"""
+    token = create_session_token()
+    active_sessions[token] = {
+        "expires_at": datetime.now() + SESSION_TIMEOUT,
+        "user": user,
+    }
+    return token
+
+
+def get_session(token: str) -> Optional[Dict[str, Any]]:
+    """取得有效會話資料，若過期則自動清理"""
+    session = active_sessions.get(token)
+    if not session:
+        return None
+
+    # Backward compatibility: legacy sessions were stored as datetime only.
+    if isinstance(session, datetime):
+        session = {
+            "expires_at": session,
+            "user": None,
+        }
+        active_sessions[token] = session
+
+    expires_at = session.get("expires_at") if isinstance(session, dict) else None
+    if not isinstance(expires_at, datetime):
+        del active_sessions[token]
+        return None
+
+    if datetime.now() > expires_at:
+        del active_sessions[token]
+        return None
+
+    return session if isinstance(session, dict) else None
+
+
 def verify_session(token: str) -> bool:
     """验证会话令牌是否有效"""
-    if token not in active_sessions:
-        return False
-    
-    if datetime.now() > active_sessions[token]:
-        # Token过期，删除
-        del active_sessions[token]
-        return False
-    
-    return True
+    return get_session(token) is not None
 
 
 def cleanup_expired_sessions():
     """清理过期的会话"""
     now = datetime.now()
-    expired = [token for token, expiry in active_sessions.items() if now > expiry]
+    expired: List[str] = []
+    for token, session in active_sessions.items():
+        if isinstance(session, datetime):
+            expires_at = session
+        elif isinstance(session, dict):
+            expires_at = session.get("expires_at")
+        else:
+            expires_at = None
+
+        if not isinstance(expires_at, datetime) or now > expires_at:
+            expired.append(token)
+
     for token in expired:
         del active_sessions[token]
+
+
+def parse_csv_env(env_key: str) -> List[str]:
+    return [value.strip() for value in os.getenv(env_key, "").split(",") if value.strip()]
+
+
+def verify_google_credential(credential: str) -> Dict[str, Any]:
+    if google_auth_requests is None or google_id_token is None:
+        raise RuntimeError("伺服器缺少 google-auth 套件，請先安裝依賴")
+
+    client_ids = parse_csv_env("GOOGLE_CLIENT_ID")
+    if not client_ids:
+        raise RuntimeError("Google 登入尚未設定 GOOGLE_CLIENT_ID")
+
+    request_adapter = google_auth_requests.Request()
+    last_error: Optional[Exception] = None
+    for client_id in client_ids:
+        try:
+            token_info = google_id_token.verify_oauth2_token(
+                credential,
+                request_adapter,
+                client_id,
+            )
+            issuer = str(token_info.get("iss", "")).strip()
+            if issuer not in {"accounts.google.com", "https://accounts.google.com"}:
+                raise ValueError("Google token issuer 不合法")
+            return token_info
+        except Exception as exc:
+            last_error = exc
+
+    raise ValueError(f"Google token 驗證失敗: {last_error}")
 
 
 def get_model_id() -> str:
@@ -1777,13 +1868,17 @@ async def login(request: LoginRequest):
         
         # 验证用户名和密码
         if request.username == valid_username and request.password == valid_password:
-            # 生成会话令牌
-            token = create_session_token()
-            active_sessions[token] = datetime.now() + SESSION_TIMEOUT
+            user = AuthUser(
+                id=f"local:{request.username}",
+                provider="local",
+                name=request.username,
+            )
+            token = create_session(user=user.model_dump())
             
             return LoginResponse(
                 success=True,
-                token=token
+                token=token,
+                user=user,
             )
         else:
             return LoginResponse(
@@ -1798,6 +1893,47 @@ async def login(request: LoginRequest):
         )
 
 
+@app.post("/api/auth/google")
+async def login_with_google(request: GoogleLoginRequest):
+    """Google ID token 登入驗證接口"""
+    try:
+        cleanup_expired_sessions()
+
+        credential = (request.credential or "").strip()
+        if not credential:
+            return LoginResponse(success=False, error="缺少 Google 驗證資訊")
+
+        token_info = verify_google_credential(credential)
+        email = str(token_info.get("email", "")).strip().lower()
+        if not email:
+            return LoginResponse(success=False, error="Google 帳號未提供 Email")
+        if not token_info.get("email_verified", False):
+            return LoginResponse(success=False, error="Google Email 尚未完成驗證")
+
+        allowed_domains = [domain.lower() for domain in parse_csv_env("GOOGLE_ALLOWED_DOMAINS")]
+        if allowed_domains:
+            email_domain = email.split("@")[-1].lower() if "@" in email else ""
+            if email_domain not in allowed_domains:
+                return LoginResponse(success=False, error="此 Google 帳號網域不在允許清單中")
+
+        subject = str(token_info.get("sub", "")).strip()
+        user = AuthUser(
+            id=f"google:{subject}" if subject else f"google:{email}",
+            provider="google",
+            email=email,
+            name=str(token_info.get("name") or email),
+        )
+        token = create_session(user=user.model_dump())
+
+        return LoginResponse(success=True, token=token, user=user)
+    except RuntimeError as exc:
+        print(f"Google 登录配置错误: {exc}")
+        return LoginResponse(success=False, error=str(exc))
+    except Exception as exc:
+        print(f"Google 登录错误: {exc}")
+        return LoginResponse(success=False, error="Google 驗證失敗，請重新登入")
+
+
 class VerifyTokenRequest(BaseModel):
     token: str
 
@@ -1807,8 +1943,10 @@ async def verify_token(request: VerifyTokenRequest):
     """验证会话令牌是否有效"""
     try:
         cleanup_expired_sessions()
-        is_valid = verify_session(request.token)
-        return {"valid": is_valid}
+        session = get_session(request.token)
+        if not session:
+            return {"valid": False}
+        return {"valid": True, "user": session.get("user")}
     except Exception as e:
         print(f"验证错误: {e}")
         return {"valid": False}
@@ -1816,7 +1954,7 @@ async def verify_token(request: VerifyTokenRequest):
 
 @app.post("/api/auth/clear-data")
 async def clear_user_data():
-    """清空所有用戶資料（用於登入時）"""
+    """清空所有用戶資料（手動重置案件時使用）"""
     try:
         print("[API] 清空所有用戶資料...")
         news_store.clear_all_records()

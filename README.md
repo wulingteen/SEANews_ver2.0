@@ -17,6 +17,8 @@
    OPENAI_MODEL=gpt-4o-mini
    PORT=8787
    VITE_API_URL=http://localhost:8787
+   VITE_GOOGLE_CLIENT_ID=your_google_web_client_id
+   GOOGLE_CLIENT_ID=your_google_web_client_id
    ```
    使用 `npm run dev` 時可省略 `VITE_API_URL`（前端會走 proxy）。
 2. 建立 Python venv 並安裝 Agno 服務端依賴

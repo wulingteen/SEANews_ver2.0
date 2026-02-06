@@ -22,12 +22,12 @@
     {
       "id": "VC-02",
       "title": "Google OAuth login integration",
-      "status": "TODO",
+      "status": "DONE",
       "estimate_hours": "6-10",
       "depends_on": [
         "VC-01"
       ],
-      "done_commit": null,
+      "done_commit": "task(VC-02)",
       "acceptance": [
         "Frontend supports Google sign-in",
         "Backend verifies Google ID token and issues app session token",

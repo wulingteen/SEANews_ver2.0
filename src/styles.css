@@ -2058,3 +2058,28 @@ body {
   }
 }
 
+.login-divider {
+  margin-top: 8px;
+  text-align: center;
+  color: #666;
+  font-size: 13px;
+}
+
+.google-login-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.google-login-button {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.login-helper-text {
+  color: #666;
+  font-size: 13px;
+  text-align: center;
+}

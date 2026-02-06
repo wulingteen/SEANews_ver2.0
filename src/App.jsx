@@ -42,6 +42,8 @@ const createId = () => Math.random().toString(36).slice(2, 10);
 const apiBase = import.meta.env.DEV
   ? ''
   : '';
+const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim();
+const GOOGLE_IDENTITY_SCRIPT_ID = 'google-identity-service';
 
 const nowTime = () =>
   new Date().toLocaleTimeString('zh-TW', {
@@ -293,6 +295,9 @@ export default function App() {
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [isGoogleAvailable, setIsGoogleAvailable] = useState(false);
+  const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
+  const googleButtonRef = useRef(null);
 
   const [documents, setDocuments] = useState(initialDocs);
   const [selectedDocId, setSelectedDocId] = useState(initialDocs[0]?.id || '');
@@ -385,6 +390,14 @@ export default function App() {
     setStreamingContent('');
   };
 
+  const finalizeAuthenticatedSession = (token) => {
+    localStorage.setItem('authToken', token);
+    resetWorkspaceState({ clearDocuments: true });
+    setIsAuthenticated(true);
+    setIsAuthChecking(false);
+    setLoginError('');
+  };
+
   // 登入處理
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -414,10 +427,7 @@ export default function App() {
       console.log('🔐 [登入] 回應數據:', { success: data.success, hasToken: !!data.token });
 
       if (data.success && data.token) {
-        // 將token存儲到localStorage
-        localStorage.setItem('authToken', data.token);
-        resetWorkspaceState({ clearDocuments: true });
-        setIsAuthenticated(true);
+        finalizeAuthenticatedSession(data.token);
         console.log('🔐 [登入] 登入成功');
       } else {
         setLoginError(data.error || '登入失敗');
@@ -433,6 +443,114 @@ export default function App() {
       setLoginPassword('');
     }
   };
+
+  const handleGoogleCredential = async (credential) => {
+    setLoginError('');
+    setIsGoogleSigningIn(true);
+
+    try {
+      const response = await fetch(`${apiBase || ''}/api/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.success && data.token) {
+        finalizeAuthenticatedSession(data.token);
+        console.log('🔐 [Google] 登入成功');
+      } else {
+        setLoginError(data.error || 'Google 登入失敗');
+        console.log('🔐 [Google] 登入失敗:', data.error);
+      }
+    } catch (error) {
+      console.error('🔐 [Google 登入錯誤]', error);
+      const errorMsg = error instanceof Error
+        ? `Google 登入失敗: ${error.message}`
+        : 'Google 登入失敗，請稍後再試';
+      setLoginError(errorMsg);
+    } finally {
+      setIsGoogleSigningIn(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isAuthChecking || isAuthenticated) return;
+    if (!GOOGLE_CLIENT_ID) {
+      setIsGoogleAvailable(false);
+      return;
+    }
+
+    let isCancelled = false;
+
+    const initializeGoogleSignIn = () => {
+      if (isCancelled) return;
+      const googleId = window.google?.accounts?.id;
+      if (!googleId || !googleButtonRef.current) return;
+
+      googleId.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: (response) => {
+          const credential = response?.credential || '';
+          if (!credential) {
+            setLoginError('Google 驗證資訊缺失，請重新嘗試');
+            return;
+          }
+          handleGoogleCredential(credential);
+        },
+      });
+
+      googleButtonRef.current.innerHTML = '';
+      googleId.renderButton(googleButtonRef.current, {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        shape: 'rectangular',
+        text: 'signin_with',
+        width: 320,
+      });
+
+      setIsGoogleAvailable(true);
+    };
+
+    if (window.google?.accounts?.id) {
+      initializeGoogleSignIn();
+      return () => {
+        isCancelled = true;
+      };
+    }
+
+    const existingScript = document.getElementById(GOOGLE_IDENTITY_SCRIPT_ID);
+    const script = existingScript || document.createElement('script');
+
+    const onLoad = () => initializeGoogleSignIn();
+    const onError = () => {
+      if (isCancelled) return;
+      setIsGoogleAvailable(false);
+      setLoginError('Google 登入元件載入失敗，請改用帳密登入');
+    };
+
+    script.addEventListener('load', onLoad);
+    script.addEventListener('error', onError);
+
+    if (!existingScript) {
+      script.id = GOOGLE_IDENTITY_SCRIPT_ID;
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      isCancelled = true;
+      script.removeEventListener('load', onLoad);
+      script.removeEventListener('error', onError);
+    };
+  }, [isAuthChecking, isAuthenticated]);
 
   // 驗證已存在的 token（有效則自動登入）
   useEffect(() => {
@@ -1686,6 +1804,25 @@ export default function App() {
               >
                 登入
               </Button>
+
+              {GOOGLE_CLIENT_ID ? (
+                <>
+                  <div className="login-divider">或使用 Google 帳號登入</div>
+                  <div className="google-login-block">
+                    <div ref={googleButtonRef} className="google-login-button" />
+                    {!isGoogleAvailable && !isGoogleSigningIn && (
+                      <Text className="login-helper-text">Google 登入元件載入中...</Text>
+                    )}
+                    {isGoogleSigningIn && (
+                      <Text className="login-helper-text">Google 驗證中，請稍候...</Text>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <Text className="login-helper-text">
+                  尚未設定 Google OAuth（`VITE_GOOGLE_CLIENT_ID`），目前使用帳密登入。
+                </Text>
+              )}
             </form>
           </div>
         </div>

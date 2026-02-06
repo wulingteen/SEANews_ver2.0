@@ -16,7 +16,7 @@ Last Updated: 2026-02-06
 | VC-02 | DONE | Google OAuth login integration (frontend + backend token verify) | 6-10h | VC-01 | task(VC-02) |
 | VC-03 | DONE | Multi-user data isolation (news/tags/history by user_id) | 8-14h | VC-02 | task(VC-03) |
 | VC-04 | DONE | P0 UX fixes (no stacking, recent-by-default, max_results) | 6-10h | VC-01 | task(VC-04) |
-| VC-05 | TODO | Release hardening (env setup, callback config, smoke checklist) | 3-6h | VC-02, VC-03, VC-04 | - |
+| VC-05 | DONE | Release hardening (env setup, callback config, smoke checklist) | 3-6h | VC-02, VC-03, VC-04 | task(VC-05) |
 
 ## Task Definition
 

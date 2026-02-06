@@ -43,6 +43,28 @@
 
 備註：PDF 會自動索引並可 RAG 檢索；DOCX/PPTX 尚未支援解析，需手動貼上文字內容。
 
+## Environment Validation
+啟動前可先檢查 `.env` 是否完整：
+```bash
+python3 server/validate_env.py
+```
+
+## Google OAuth Setup
+本專案採用 Google Identity Services（ID token）登入流程，前後端都要使用同一組 Web Client ID。
+
+1. 在 Google Cloud Console 建立 **OAuth 2.0 Client ID (Web application)**。
+2. 在 **Authorized JavaScript origins** 加入：
+   - `http://127.0.0.1:5176`
+   - `http://localhost:5176`
+   - 你的正式網域（例如 `https://your-domain.com`）
+3. 將同一個 Client ID 設到 `.env`：
+   - `VITE_GOOGLE_CLIENT_ID=<your_web_client_id>`
+   - `GOOGLE_CLIENT_ID=<your_web_client_id>`
+4. 若只允許公司網域登入，可設定：
+   - `GOOGLE_ALLOWED_DOMAINS=example.com,example.org`
+
+說明：目前流程不使用 OAuth redirect callback，主要依賴前端取得 ID token 後送到後端驗證。
+
 ## Trace / Streaming Events
 後端 `POST /api/artifacts` 會以 SSE 串流傳回：
 - `{"chunk": "..."}`：逐段輸出文字
@@ -71,6 +93,7 @@
 - Task board: `VIBE_TASKS.md`
 - Machine-readable state: `vibe_tasks.json`
 - Commit helper (one task one commit): `scripts/task_commit.sh`
+- Smoke checklist: `SMOKE_CHECKLIST.md`
 
 Example:
 ```bash

@@ -67,14 +67,14 @@
     {
       "id": "VC-05",
       "title": "Release hardening",
-      "status": "TODO",
+      "status": "DONE",
       "estimate_hours": "3-6",
       "depends_on": [
         "VC-02",
         "VC-03",
         "VC-04"
       ],
-      "done_commit": null,
+      "done_commit": "task(VC-05)",
       "acceptance": [
         "Environment keys are documented",
         "Google callback and origin config are documented",

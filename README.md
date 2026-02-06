@@ -65,6 +65,17 @@
 - `AGNO_TRACE_MAX_LEN=2000`：trace 文字截斷長度
 - `AGNO_TRACE_ARGS_MAX_LEN=1000`：tool args 截斷長度
 
+## Vibe Workflow (Persistent)
+- Task board: `VIBE_TASKS.md`
+- Machine-readable state: `vibe_tasks.json`
+- Commit helper (one task one commit): `scripts/task_commit.sh`
+
+Example:
+```bash
+git add <files>
+scripts/task_commit.sh VC-01 "remove forced relogin flow"
+```
+
 ## 測試
 單元測試：
 ```bash

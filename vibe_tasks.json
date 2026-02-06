@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "last_updated": "2026-02-06",
+  "commit_policy": {
+    "rule": "one_task_one_commit",
+    "message_format": "task(<TASK_ID>): <short summary>"
+  },
+  "tasks": [
+    {
+      "id": "VC-01",
+      "title": "Auth baseline refactor",
+      "status": "TODO",
+      "estimate_hours": "4-6",
+      "depends_on": [],
+      "done_commit": null,
+      "acceptance": [
+        "Existing token is reused if valid",
+        "Login no longer clears all records automatically",
+        "Manual new-case reset still works"
+      ]
+    },
+    {
+      "id": "VC-02",
+      "title": "Google OAuth login integration",
+      "status": "TODO",
+      "estimate_hours": "6-10",
+      "depends_on": [
+        "VC-01"
+      ],
+      "done_commit": null,
+      "acceptance": [
+        "Frontend supports Google sign-in",
+        "Backend verifies Google ID token and issues app session token",
+        "Invalid token paths return controlled errors"
+      ]
+    },
+    {
+      "id": "VC-03",
+      "title": "Multi-user data isolation",
+      "status": "TODO",
+      "estimate_hours": "8-14",
+      "depends_on": [
+        "VC-02"
+      ],
+      "done_commit": null,
+      "acceptance": [
+        "News records and tags are user-scoped",
+        "APIs read/write only current user data",
+        "Legacy data path is handled"
+      ]
+    },
+    {
+      "id": "VC-04",
+      "title": "P0 UX fixes",
+      "status": "TODO",
+      "estimate_hours": "6-10",
+      "depends_on": [
+        "VC-01"
+      ],
+      "done_commit": null,
+      "acceptance": [
+        "New search can replace old result set",
+        "Default query window uses recent period",
+        "max_results is supported"
+      ]
+    },
+    {
+      "id": "VC-05",
+      "title": "Release hardening",
+      "status": "TODO",
+      "estimate_hours": "3-6",
+      "depends_on": [
+        "VC-02",
+        "VC-03",
+        "VC-04"
+      ],
+      "done_commit": null,
+      "acceptance": [
+        "Environment keys are documented",
+        "Google callback and origin config are documented",
+        "Smoke checklist is available"
+      ]
+    }
+  ]
+}
+

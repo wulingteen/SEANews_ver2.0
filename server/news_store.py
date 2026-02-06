@@ -48,10 +48,31 @@ class NewsStore:
         try:
             with self._get_conn() as conn:
                 conn.executescript(schema_sql)
+                self._ensure_user_scope(conn)
+                conn.commit()
         except Exception as e:
             print(f"[NewsStore] DB 初始化失敗: {e}")
 
-    def add_record(self, record: Dict[str, Any]) -> bool:
+    def _ensure_user_scope(self, conn: sqlite3.Connection) -> None:
+        """確保 user_id 欄位與索引存在，兼容既有資料庫"""
+        cursor = conn.execute("PRAGMA table_info(news_records)")
+        columns = {row["name"] for row in cursor.fetchall()}
+        if "user_id" not in columns:
+            conn.execute("ALTER TABLE news_records ADD COLUMN user_id TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_news_user_id ON news_records(user_id)")
+
+    @staticmethod
+    def _normalize_user_id(user_id: Optional[str]) -> Optional[str]:
+        if user_id is None:
+            return None
+        normalized = str(user_id).strip()
+        return normalized if normalized else None
+
+    @staticmethod
+    def _is_legacy_user_id(user_id: Optional[str]) -> bool:
+        return user_id is None or str(user_id).strip() == ""
+
+    def add_record(self, record: Dict[str, Any], user_id: Optional[str] = None) -> bool:
         """新增新聞記錄"""
         try:
             record_id = record.get('id')
@@ -60,6 +81,7 @@ class NewsStore:
             
             # 準備插入數據
             now = datetime.now().isoformat()
+            resolved_user_id = self._normalize_user_id(user_id or record.get('user_id'))
             
             # 處理 JSON 欄位
             tags = json.dumps(record.get('tags', []), ensure_ascii=False)
@@ -67,8 +89,8 @@ class NewsStore:
             sql = """
             INSERT OR REPLACE INTO news_records (
                 id, name, content, country, publish_date, url, created_at, updated_at, 
-                types, source, message, status, preview, tags, pages
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                types, source, message, status, preview, tags, pages, user_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             
             params = (
@@ -86,7 +108,8 @@ class NewsStore:
                 record.get('status'),
                 record.get('preview'),
                 tags,
-                record.get('pages')
+                record.get('pages'),
+                resolved_user_id,
             )
 
             with self._get_conn() as conn:
@@ -99,11 +122,24 @@ class NewsStore:
             print(f"[NewsStore] 新增記錄失敗: {e}")
             return False
 
-    def get_all_records(self) -> List[Dict[str, Any]]:
-        """獲取所有新聞記錄"""
+    def get_all_records(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """獲取新聞記錄（可依 user_id 隔離）"""
         try:
+            normalized_user_id = self._normalize_user_id(user_id)
             with self._get_conn() as conn:
-                cursor = conn.execute("SELECT * FROM news_records ORDER BY created_at DESC")
+                if normalized_user_id:
+                    # 兼容舊資料：首次讀取時把 legacy rows 併入當前用戶
+                    conn.execute(
+                        "UPDATE news_records SET user_id = ? WHERE user_id IS NULL OR TRIM(user_id) = ''",
+                        (normalized_user_id,),
+                    )
+                    conn.commit()
+                    cursor = conn.execute(
+                        "SELECT * FROM news_records WHERE user_id = ? ORDER BY created_at DESC",
+                        (normalized_user_id,),
+                    )
+                else:
+                    cursor = conn.execute("SELECT * FROM news_records ORDER BY created_at DESC")
                 rows = cursor.fetchall()
                 
             results = []
@@ -122,15 +158,34 @@ class NewsStore:
             print(f"[NewsStore] 獲取記錄失敗: {e}")
             return []
 
-    def get_record_by_id(self, record_id: str) -> Optional[Dict[str, Any]]:
-        """根據 ID 獲取新聞記錄"""
+    def get_record_by_id(self, record_id: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """根據 ID 獲取新聞記錄（可依 user_id 隔離）"""
         try:
+            normalized_user_id = self._normalize_user_id(user_id)
             with self._get_conn() as conn:
-                cursor = conn.execute("SELECT * FROM news_records WHERE id = ?", (record_id,))
+                if normalized_user_id:
+                    cursor = conn.execute(
+                        """
+                        SELECT * FROM news_records
+                        WHERE id = ?
+                          AND (user_id = ? OR user_id IS NULL OR TRIM(user_id) = '')
+                        """,
+                        (record_id, normalized_user_id),
+                    )
+                else:
+                    cursor = conn.execute("SELECT * FROM news_records WHERE id = ?", (record_id,))
                 row = cursor.fetchone()
                 
             if row:
                 r = dict(row)
+                if normalized_user_id and self._is_legacy_user_id(r.get("user_id")):
+                    with self._get_conn() as conn:
+                        conn.execute(
+                            "UPDATE news_records SET user_id = ? WHERE id = ?",
+                            (normalized_user_id, record_id),
+                        )
+                        conn.commit()
+                    r["user_id"] = normalized_user_id
                 try:
                     r['tags'] = json.loads(r['tags']) if r['tags'] else []
                 except:
@@ -142,17 +197,34 @@ class NewsStore:
             print(f"[NewsStore] 獲取記錄失敗: {e}")
             return None
 
-    def update_tags(self, record_id: str, tags: List[str]) -> bool:
-        """更新記錄的標籤"""
+    def update_tags(self, record_id: str, tags: List[str], user_id: Optional[str] = None) -> bool:
+        """更新記錄的標籤（可依 user_id 隔離）"""
         try:
             tags_json = json.dumps(tags, ensure_ascii=False)
             updated_at = datetime.now().isoformat()
+            normalized_user_id = self._normalize_user_id(user_id)
             
             with self._get_conn() as conn:
-                cursor = conn.execute(
-                    "UPDATE news_records SET tags = ?, updated_at = ? WHERE id = ?", 
-                    (tags_json, updated_at, record_id)
-                )
+                if normalized_user_id:
+                    cursor = conn.execute(
+                        """
+                        UPDATE news_records
+                        SET tags = ?,
+                            updated_at = ?,
+                            user_id = CASE
+                                WHEN user_id IS NULL OR TRIM(user_id) = '' THEN ?
+                                ELSE user_id
+                            END
+                        WHERE id = ?
+                          AND (user_id = ? OR user_id IS NULL OR TRIM(user_id) = '')
+                        """,
+                        (tags_json, updated_at, normalized_user_id, record_id, normalized_user_id),
+                    )
+                else:
+                    cursor = conn.execute(
+                        "UPDATE news_records SET tags = ?, updated_at = ? WHERE id = ?", 
+                        (tags_json, updated_at, record_id)
+                    )
                 if cursor.rowcount > 0:
                     conn.commit()
                     print(f"[NewsStore] 更新標籤: {record_id}")
@@ -162,11 +234,22 @@ class NewsStore:
             print(f"[NewsStore] 更新標籤失敗: {e}")
             return False
 
-    def delete_record(self, record_id: str) -> bool:
-        """刪除新聞記錄"""
+    def delete_record(self, record_id: str, user_id: Optional[str] = None) -> bool:
+        """刪除新聞記錄（可依 user_id 隔離）"""
         try:
+            normalized_user_id = self._normalize_user_id(user_id)
             with self._get_conn() as conn:
-                cursor = conn.execute("DELETE FROM news_records WHERE id = ?", (record_id,))
+                if normalized_user_id:
+                    cursor = conn.execute(
+                        """
+                        DELETE FROM news_records
+                        WHERE id = ?
+                          AND (user_id = ? OR user_id IS NULL OR TRIM(user_id) = '')
+                        """,
+                        (record_id, normalized_user_id),
+                    )
+                else:
+                    cursor = conn.execute("DELETE FROM news_records WHERE id = ?", (record_id,))
                 if cursor.rowcount > 0:
                     conn.commit()
                     print(f"[NewsStore] 刪除記錄: {record_id}")
@@ -176,11 +259,21 @@ class NewsStore:
             print(f"[NewsStore] 刪除記錄失敗: {e}")
             return False
             
-    def clear_all_records(self) -> bool:
-        """清空所有新聞記錄"""
+    def clear_all_records(self, user_id: Optional[str] = None) -> bool:
+        """清空新聞記錄（可依 user_id 隔離）"""
         try:
+            normalized_user_id = self._normalize_user_id(user_id)
             with self._get_conn() as conn:
-                conn.execute("DELETE FROM news_records")
+                if normalized_user_id:
+                    conn.execute(
+                        """
+                        DELETE FROM news_records
+                        WHERE user_id = ? OR user_id IS NULL OR TRIM(user_id) = ''
+                        """,
+                        (normalized_user_id,),
+                    )
+                else:
+                    conn.execute("DELETE FROM news_records")
                 conn.commit()
             print("[NewsStore] 已清空記錄")
             return True

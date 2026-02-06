@@ -6,13 +6,14 @@ import uuid
 import time
 import secrets
 import threading
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from mimetypes import guess_type
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union, Literal, Set
 
 import dotenv
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -383,6 +384,7 @@ class GoogleLoginRequest(BaseModel):
 # Simple in-memory session store (for production, use Redis or database)
 active_sessions: Dict[str, Union[datetime, Dict[str, Any]]] = {}
 SESSION_TIMEOUT = timedelta(hours=24)
+REQUEST_USER_ID_CTX: ContextVar[str] = ContextVar("request_user_id", default="local:legacy")
 
 
 def create_session_token() -> str:
@@ -394,10 +396,11 @@ def create_session(
     user: Optional[Dict[str, Optional[str]]] = None,
 ) -> str:
     """建立會話並儲存使用者資訊（兼容本地帳密與 Google 登入）"""
+    normalized_user = normalize_auth_user(user)
     token = create_session_token()
     active_sessions[token] = {
         "expires_at": datetime.now() + SESSION_TIMEOUT,
-        "user": user,
+        "user": normalized_user,
     }
     return token
 
@@ -412,7 +415,7 @@ def get_session(token: str) -> Optional[Dict[str, Any]]:
     if isinstance(session, datetime):
         session = {
             "expires_at": session,
-            "user": None,
+            "user": normalize_auth_user(None),
         }
         active_sessions[token] = session
 
@@ -454,6 +457,54 @@ def cleanup_expired_sessions():
 
 def parse_csv_env(env_key: str) -> List[str]:
     return [value.strip() for value in os.getenv(env_key, "").split(",") if value.strip()]
+
+
+def normalize_auth_user(user: Optional[Dict[str, Any]]) -> Dict[str, Optional[str]]:
+    if isinstance(user, dict):
+        user_id = str(user.get("id", "")).strip()
+        provider = str(user.get("provider", "")).strip() or "local"
+        if user_id:
+            email = user.get("email")
+            name = user.get("name")
+            return {
+                "id": user_id,
+                "provider": provider,
+                "email": str(email).strip() if isinstance(email, str) and email.strip() else None,
+                "name": str(name).strip() if isinstance(name, str) and name.strip() else None,
+            }
+    return {
+        "id": "local:legacy",
+        "provider": "local",
+        "email": None,
+        "name": "Legacy User",
+    }
+
+
+def extract_bearer_token(request: Request) -> Optional[str]:
+    auth_header = request.headers.get("authorization", "").strip()
+    if not auth_header.lower().startswith("bearer "):
+        return None
+    token = auth_header[7:].strip()
+    return token or None
+
+
+def require_authenticated_user(request: Request) -> Dict[str, Optional[str]]:
+    cleanup_expired_sessions()
+    token = extract_bearer_token(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="缺少登入憑證")
+    session = get_session(token)
+    if not session:
+        raise HTTPException(status_code=401, detail="登入已失效，請重新登入")
+    return normalize_auth_user(session.get("user"))
+
+
+def require_authenticated_user_id(request: Request) -> str:
+    user = require_authenticated_user(request)
+    user_id = str(user.get("id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="登入資料不完整")
+    return user_id
 
 
 def verify_google_credential(credential: str) -> Dict[str, Any]:
@@ -1008,9 +1059,11 @@ def make_news_doc_id(news_key: str) -> str:
 def build_news_records_from_articles(
     articles: List[Dict[str, str]],
     seen_keys: Optional[set] = None,
+    user_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     if not articles:
         return []
+    resolved_user_id = user_id or REQUEST_USER_ID_CTX.get()
     seen = seen_keys if seen_keys is not None else set()
     new_articles: List[Dict[str, str]] = []
     new_keys: List[str] = []
@@ -1070,10 +1123,11 @@ def build_news_records_from_articles(
             "country": country,  # 保存國家字段
             "publish_date": publish_date,
             "url": url,
+            "user_id": resolved_user_id,
         }
 
         # 保存到數據庫
-        news_store.add_record(document_record)
+        news_store.add_record(document_record, user_id=resolved_user_id)
         documents.append(document_record)
 
     return documents
@@ -1083,9 +1137,11 @@ def build_research_document(
     data: Dict[str, Any],
     last_user: str,
     use_web_search: bool,
+    user_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     if not use_web_search:
         return None
+    resolved_user_id = user_id or REQUEST_USER_ID_CTX.get()
 
     content_parts: List[str] = []
     assistant_content = (data.get("assistant") or {}).get("content") or ""
@@ -1129,11 +1185,12 @@ def build_research_document(
         "preview": combined[:400],
         "content": combined,
         "source": "research",
-        "tags": []
+        "tags": [],
+        "user_id": resolved_user_id,
     }
     
     # 保存到數據庫
-    news_store.add_record(document_record)
+    news_store.add_record(document_record, user_id=resolved_user_id)
     
     return document_record
 
@@ -1143,6 +1200,7 @@ def build_news_documents(
     last_user: str,
     use_web_search: bool,
     seen_keys: Optional[set] = None,
+    user_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """將搜尋結果拆分成獨立的新聞文檔"""
     assistant_content = (data.get("assistant") or {}).get("content") or ""
@@ -1159,7 +1217,8 @@ def build_news_documents(
     if not articles:
         return []
     
-    return build_news_records_from_articles(articles, seen_keys=seen_keys)
+    resolved_user_id = user_id or REQUEST_USER_ID_CTX.get()
+    return build_news_records_from_articles(articles, seen_keys=seen_keys, user_id=resolved_user_id)
 
 
 def build_smalltalk_agent(
@@ -1946,19 +2005,20 @@ async def verify_token(request: VerifyTokenRequest):
         session = get_session(request.token)
         if not session:
             return {"valid": False}
-        return {"valid": True, "user": session.get("user")}
+        return {"valid": True, "user": normalize_auth_user(session.get("user"))}
     except Exception as e:
         print(f"验证错误: {e}")
         return {"valid": False}
 
 
 @app.post("/api/auth/clear-data")
-async def clear_user_data():
+async def clear_user_data(request: Request):
     """清空所有用戶資料（手動重置案件時使用）"""
+    user_id = require_authenticated_user_id(request)
     try:
-        print("[API] 清空所有用戶資料...")
-        news_store.clear_all_records()
-        clear_all_tags()
+        print(f"[API] 清空使用者資料: {user_id}")
+        news_store.clear_all_records(user_id=user_id)
+        clear_all_tags(user_id=user_id)
         print("[API] 資料清空完成")
         return {"success": True}
     except Exception as e:
@@ -1972,8 +2032,9 @@ async def health():
 
 
 @app.get("/api/tags")
-async def get_tags():
-    store = load_tag_store()
+async def get_tags(request: Request):
+    user_id = require_authenticated_user_id(request)
+    store = load_tag_store(user_id=user_id)
     return {
         "custom_tags": store.get("custom_tags", []),
         "doc_tags": store.get("docs", {}),
@@ -1981,17 +2042,19 @@ async def get_tags():
 
 
 @app.post("/api/tags")
-async def update_tags(req: TagUpdateRequest):
+async def update_tags(request: Request, req: TagUpdateRequest):
+    user_id = require_authenticated_user_id(request)
     if req.tag_key and req.tags is not None:
-        set_doc_tags(req.tag_key, req.tags)
+        set_doc_tags(req.tag_key, req.tags, user_id=user_id)
     if req.custom_tags is not None:
-        set_custom_tags(req.custom_tags)
+        set_custom_tags(req.custom_tags, user_id=user_id)
     return {"ok": True}
 
 
 @app.get("/api/documents/preloaded")
-async def get_preloaded_documents():
+async def get_preloaded_documents(request: Request):
     """獲取預加載的文檔列表"""
+    user_id = require_authenticated_user_id(request)
     documents = []
     for doc_id, stored in get_rag_store().docs.items():
         tag_key = stored.content_hash or stored.id
@@ -2001,7 +2064,7 @@ async def get_preloaded_documents():
                 "name": stored.name,
                 "type": stored.type,
                 "pages": stored.pages or "-",
-                "tags": get_doc_tags(tag_key),
+                "tags": get_doc_tags(tag_key, user_id=user_id),
                 "tag_key": tag_key,
                 "status": stored.status,
                 "message": stored.message,
@@ -2012,7 +2075,8 @@ async def get_preloaded_documents():
 
 
 @app.post("/api/documents")
-async def upload_documents(files: List[UploadFile] = File(...)):
+async def upload_documents(request: Request, files: List[UploadFile] = File(...)):
+    user_id = require_authenticated_user_id(request)
     if not files:
         return JSONResponse({"error": "No files provided"}, status_code=400)
 
@@ -2022,7 +2086,7 @@ async def upload_documents(files: List[UploadFile] = File(...)):
         ext = os.path.splitext(filename)[1].lower()
         data = await file.read()
         tag_key = compute_tag_key(data)
-        stored_tags = get_doc_tags(tag_key)
+        stored_tags = get_doc_tags(tag_key, user_id=user_id)
 
         try:
             if ext == ".pdf":
@@ -2073,7 +2137,8 @@ async def upload_documents(files: List[UploadFile] = File(...)):
 
 
 @app.get("/api/documents/preloaded")
-async def get_preloaded_documents():
+async def get_preloaded_documents(request: Request):
+    user_id = require_authenticated_user_id(request)
     docs_dir = Path(__file__).resolve().parent.parent / "src" / "docs"
     if not docs_dir.exists():
         return {"documents": []}
@@ -2090,7 +2155,7 @@ async def get_preloaded_documents():
                     "name": stored.name,
                     "type": stored.type,
                     "pages": stored.pages or "-",
-                    "tags": get_doc_tags(tag_key),
+                    "tags": get_doc_tags(tag_key, user_id=user_id),
                     "tag_key": tag_key,
                     "status": stored.status,
                     "message": stored.message,
@@ -2116,7 +2181,9 @@ async def get_preloaded_documents():
 
 
 @app.post("/api/artifacts")
-async def generate_artifacts(req: ArtifactRequest):
+async def generate_artifacts(request: Request, req: ArtifactRequest):
+    current_user_id = require_authenticated_user_id(request)
+    request_user_token = REQUEST_USER_ID_CTX.set(current_user_id)
     try:
         import time
         start_time = time.time()
@@ -2397,6 +2464,7 @@ async def generate_artifacts(req: ArtifactRequest):
                                 new_docs = build_news_records_from_articles(
                                     articles,
                                     seen_keys=streamed_news_keys,
+                                    user_id=current_user_id,
                                 )
                                 if new_docs:
                                     yield f"data: {json.dumps({'documents_append': new_docs})}\n\n"
@@ -2440,6 +2508,7 @@ async def generate_artifacts(req: ArtifactRequest):
                             last_user,
                             use_web_search,
                             seen_keys=streamed_news_keys,
+                            user_id=current_user_id,
                         )
                         if news_docs:
                             existing_docs = final_data.get("documents_append") or []
@@ -2523,7 +2592,12 @@ async def generate_artifacts(req: ArtifactRequest):
                 data["reasoning_summary"] = truncate_text(reasoning_summary, TRACE_MAX_LEN)
             if ocr_updates:
                 data["documents_update"] = ocr_updates
-            news_docs = build_news_documents(data, last_user, use_web_search)
+            news_docs = build_news_documents(
+                data,
+                last_user,
+                use_web_search,
+                user_id=current_user_id,
+            )
             if news_docs:
                 data["documents_append"] = news_docs
             return data
@@ -2532,6 +2606,8 @@ async def generate_artifacts(req: ArtifactRequest):
             "error": "LLM request failed",
             "detail": str(exc),
         }
+    finally:
+        REQUEST_USER_ID_CTX.reset(request_user_token)
 
 
 class ExportNewsRequest(BaseModel):
@@ -2544,10 +2620,11 @@ class ExportNewsRequest(BaseModel):
 
 
 @app.post("/api/export-news")
-async def export_and_send_news(req: ExportNewsRequest):
+async def export_and_send_news(req: ExportNewsRequest, request: Request):
     """
     從文件內容中解析新聞列表，匯出到 Excel 並發送郵件
     """
+    user_id = require_authenticated_user_id(request)
     try:
         if not req.document_content:
             return JSONResponse(
@@ -2645,12 +2722,13 @@ async def export_and_send_news(req: ExportNewsRequest):
 
 
 @app.get("/api/news/records")
-async def get_news_records():
+async def get_news_records(request: Request):
     """
     獲取所有新聞記錄
     """
+    user_id = require_authenticated_user_id(request)
     try:
-        records = news_store.get_all_records()
+        records = news_store.get_all_records(user_id=user_id)
         return JSONResponse(content={"documents": records})
     except Exception as e:
         return JSONResponse(
@@ -2667,10 +2745,11 @@ class BatchExportNewsRequest(BaseModel):
 
 
 @app.post("/api/export-news-batch")
-async def export_and_send_news_batch(req: BatchExportNewsRequest):
+async def export_and_send_news_batch(req: BatchExportNewsRequest, request: Request):
     """
     批次匯出多個文件的新聞到一個 Excel 並發送郵件
     """
+    _ = require_authenticated_user_id(request)
     try:
         if not req.documents or len(req.documents) == 0:
             return JSONResponse(
@@ -2769,23 +2848,24 @@ async def export_and_send_news_batch(req: BatchExportNewsRequest):
 
 
 @app.delete("/api/news/records/{record_id}")
-async def delete_news_record(record_id: str):
+async def delete_news_record(record_id: str, request: Request):
     """
     刪除指定的新聞記錄
     """
+    user_id = require_authenticated_user_id(request)
     try:
         print(f"[DELETE API] 收到刪除請求: {record_id}")
         print(f"[DELETE API] 資料庫路徑: {news_store.db_path}")
         
         # 刪除前先檢查記錄是否存在
-        existing = news_store.get_record_by_id(record_id)
+        existing = news_store.get_record_by_id(record_id, user_id=user_id)
         print(f"[DELETE API] 刪除前檢查記錄: {existing is not None}")
         
-        success = news_store.delete_record(record_id)
+        success = news_store.delete_record(record_id, user_id=user_id)
         print(f"[DELETE API] 刪除結果: {success}")
         
         # 刪除後再次檢查
-        check_after = news_store.get_record_by_id(record_id)
+        check_after = news_store.get_record_by_id(record_id, user_id=user_id)
         print(f"[DELETE API] 刪除後檢查記錄: {check_after is not None}")
         
         if success:
@@ -2810,12 +2890,13 @@ async def delete_news_record(record_id: str):
 
 
 @app.put("/api/news/records/{record_id}/tags")
-async def update_news_record_tags(record_id: str, tags: List[str]):
+async def update_news_record_tags(record_id: str, tags: List[str], request: Request):
     """
     更新新聞記錄的標籤
     """
+    user_id = require_authenticated_user_id(request)
     try:
-        success = news_store.update_tags(record_id, tags)
+        success = news_store.update_tags(record_id, tags, user_id=user_id)
         if success:
             return JSONResponse(content={"success": True, "message": "標籤已更新"})
         else:
@@ -2831,12 +2912,13 @@ async def update_news_record_tags(record_id: str, tags: List[str]):
 
 
 @app.post("/api/news/records")
-async def save_news_record(record: Dict[str, Any]):
+async def save_news_record(record: Dict[str, Any], request: Request):
     """
     保存新聞記錄到數據庫
     """
+    user_id = require_authenticated_user_id(request)
     try:
-        success = news_store.add_record(record)
+        success = news_store.add_record(record, user_id=user_id)
         if success:
             return JSONResponse(content={"success": True, "message": "記錄已保存"})
         else:

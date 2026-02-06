@@ -37,12 +37,12 @@
     {
       "id": "VC-03",
       "title": "Multi-user data isolation",
-      "status": "TODO",
+      "status": "DONE",
       "estimate_hours": "8-14",
       "depends_on": [
         "VC-02"
       ],
-      "done_commit": null,
+      "done_commit": "task(VC-03)",
       "acceptance": [
         "News records and tags are user-scoped",
         "APIs read/write only current user data",

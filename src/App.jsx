@@ -398,6 +398,15 @@ export default function App() {
     setLoginError('');
   };
 
+  const withAuthHeaders = (headers = {}) => {
+    const token = localStorage.getItem('authToken');
+    if (!token) return { ...headers };
+    return {
+      ...headers,
+      Authorization: `Bearer ${token}`,
+    };
+  };
+
   // 登入處理
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -620,7 +629,9 @@ export default function App() {
 
     const loadNewsRecords = async () => {
       try {
-        const response = await fetch(`${apiBase || ''}/api/news/records`);
+        const response = await fetch(`${apiBase || ''}/api/news/records`, {
+          headers: withAuthHeaders(),
+        });
         if (response.ok) {
           const data = await response.json();
           console.log('📰 [載入] 從資料庫載入記錄:', data.documents?.length, '筆');
@@ -651,7 +662,7 @@ export default function App() {
     try {
       await fetch(`${apiBase || ''}/api/tags`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ tag_key: tagKey, tags }),
       });
     } catch (error) {
@@ -663,7 +674,7 @@ export default function App() {
     try {
       await fetch(`${apiBase || ''}/api/tags`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ custom_tags: tags }),
       });
     } catch (error) {
@@ -681,10 +692,14 @@ export default function App() {
 
   // Load preloaded PDF documents on startup (only once)
   useEffect(() => {
+    if (!isAuthenticated) return;
+
     let isMounted = true;
     const loadPreloadedDocs = async () => {
       try {
-        const response = await fetch(`${apiBase || ''}/api/documents/preloaded`);
+        const response = await fetch(`${apiBase || ''}/api/documents/preloaded`, {
+          headers: withAuthHeaders(),
+        });
         if (!response.ok || !isMounted) return;
         const data = await response.json();
 
@@ -735,13 +750,17 @@ export default function App() {
     };
     loadPreloadedDocs();
     return () => { isMounted = false; };
-  }, []);
+  }, [isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
+
     let isMounted = true;
     const loadTags = async () => {
       try {
-        const response = await fetch(`${apiBase || ''}/api/tags`);
+        const response = await fetch(`${apiBase || ''}/api/tags`, {
+          headers: withAuthHeaders(),
+        });
         if (!response.ok || !isMounted) return;
         const data = await response.json();
         if (Array.isArray(data.custom_tags) && isMounted) {
@@ -764,7 +783,7 @@ export default function App() {
     };
     loadTags();
     return () => { isMounted = false; };
-  }, []);
+  }, [isAuthenticated]);
 
   // Ensure activeTranslationIndex is within bounds for selected document
   useEffect(() => {
@@ -854,7 +873,7 @@ export default function App() {
         // 同時更新數據庫
         fetch(`${apiBase || ''}/api/news/records/${docId}/tags`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify(updatedTags),
         }).catch(err => console.warn('更新標籤失敗:', err));
       }
@@ -908,6 +927,7 @@ export default function App() {
         console.log('🗑️ [刪除] 呼叫後端 API:', `${apiBase || ''}/api/news/records/${docId}`);
         const response = await fetch(`${apiBase || ''}/api/news/records/${docId}`, {
           method: 'DELETE',
+          headers: withAuthHeaders(),
         });
 
         console.log('🗑️ [刪除] 後端回應狀態:', response.status, response.ok);
@@ -963,6 +983,7 @@ export default function App() {
 
       const response = await fetch(`${apiBase || ''}/api/documents`, {
         method: 'POST',
+        headers: withAuthHeaders(),
         body: formData,
       });
       const data = await response.json();
@@ -1034,7 +1055,7 @@ export default function App() {
     try {
       const response = await fetch(`${apiBase || ''}/api/auth/clear-data`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
       });
       const result = await response.json().catch(() => null);
       if (!response.ok || (result && result.success === false)) {
@@ -1116,7 +1137,7 @@ export default function App() {
     try {
       const response = await fetch(`${apiBase || ''}/api/export-news`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           document_id: currentDocForExport.id,
           document_name: currentDocForExport.name,
@@ -1201,7 +1222,7 @@ export default function App() {
 
       const response = await fetch(`${apiBase || ''}/api/export-news-batch`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           documents: selectedDocs.map(doc => ({
             id: doc.id,
@@ -1263,6 +1284,7 @@ export default function App() {
         const deletePromises = newsRecordIds.map(docId =>
           fetch(`${apiBase || ''}/api/news/records/${docId}`, {
             method: 'DELETE',
+            headers: withAuthHeaders(),
           })
         );
 
@@ -1340,7 +1362,7 @@ export default function App() {
 
       const response = await fetch(`${apiBase}/api/artifacts`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           messages: outgoingMessages.map((item) => ({
             role: item.role,

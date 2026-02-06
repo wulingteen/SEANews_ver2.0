@@ -2,6 +2,7 @@
 
 CREATE TABLE IF NOT EXISTS news_records (
     id TEXT PRIMARY KEY,
+    user_id TEXT,
     name TEXT,
     content TEXT,
     country TEXT,
@@ -21,3 +22,4 @@ CREATE TABLE IF NOT EXISTS news_records (
 CREATE INDEX IF NOT EXISTS idx_country ON news_records(country);
 CREATE INDEX IF NOT EXISTS idx_types ON news_records(types);
 CREATE INDEX IF NOT EXISTS idx_created_at ON news_records(created_at);
+CREATE INDEX IF NOT EXISTS idx_news_user_id ON news_records(user_id);

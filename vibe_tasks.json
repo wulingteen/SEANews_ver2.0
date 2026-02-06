@@ -52,12 +52,12 @@
     {
       "id": "VC-04",
       "title": "P0 UX fixes",
-      "status": "TODO",
+      "status": "DONE",
       "estimate_hours": "6-10",
       "depends_on": [
         "VC-01"
       ],
-      "done_commit": null,
+      "done_commit": "task(VC-04)",
       "acceptance": [
         "New search can replace old result set",
         "Default query window uses recent period",

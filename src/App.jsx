@@ -92,6 +92,18 @@ const buildDocumentsPayload = (documents, userText) => {
   return [];
 };
 
+const hasExplicitDateConstraint = (text = '') => {
+  const value = text.trim();
+  if (!value) return false;
+  return /(20\d{2}[/-年.]?\d{0,2}[/-月.]?\d{0,2}|最近|近(?:期|一|兩|三|七|14|30)|今天|昨日|昨天|本週|本周|本月|本季|今年|過去|since|from|between|last\s+\d+)/i.test(value);
+};
+
+const clampInteger = (value, fallback, min, max) => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+};
+
 // Estimate pages based on content length (roughly 3000 chars per page)
 const estimatePages = (content) => {
   if (!content) return '-';
@@ -310,6 +322,9 @@ export default function App() {
   const [showBatchExportModal, setShowBatchExportModal] = useState(false); // 批次匯出對話框
   const [batchRecipientEmail, setBatchRecipientEmail] = useState(''); // 批次匯出收件人
   const [isBatchExporting, setIsBatchExporting] = useState(false); // 批次匯出中
+  const [replaceSearchResults, setReplaceSearchResults] = useState(true);
+  const [defaultRecentDays, setDefaultRecentDays] = useState(7);
+  const [maxSearchResults, setMaxSearchResults] = useState(10);
   const [editingDocId, setEditingDocId] = useState(''); // For tag editing
   const [customTags, setCustomTags] = useState([]); // User-created tags
   const [newTagInput, setNewTagInput] = useState('');
@@ -1326,6 +1341,37 @@ export default function App() {
     const trimmed = composerText.trim();
     if (!trimmed || isLoading) return;
 
+    const isNewsSearchQuery = isLikelyNewsSearch(trimmed);
+    const normalizedRecentDays = clampInteger(defaultRecentDays, 7, 1, 30);
+    const normalizedMaxResults = clampInteger(maxSearchResults, 10, 1, 50);
+
+    if (isNewsSearchQuery && replaceSearchResults) {
+      setDocuments((prev) => {
+        const next = prev.filter((doc) => {
+          const source = (doc.source || '').toLowerCase();
+          const type = (doc.type || '').toUpperCase();
+          return source !== 'news' && source !== 'research' && type !== 'NEWS' && type !== 'RESEARCH';
+        });
+        if (selectedDocId && !next.some((doc) => doc.id === selectedDocId)) {
+          setSelectedDocId(next[0]?.id || '');
+        }
+        return next;
+      });
+      setSelectedNewsIds([]);
+    }
+
+    const searchConstraints = [];
+    if (isNewsSearchQuery && !hasExplicitDateConstraint(trimmed)) {
+      searchConstraints.push(`若未指定期間，預設只搜尋最近 ${normalizedRecentDays} 天新聞。`);
+    }
+    if (isNewsSearchQuery) {
+      searchConstraints.push(`最多回傳 ${normalizedMaxResults} 則新聞，優先保留最相關且可驗證來源。`);
+    }
+
+    const messageForModel = searchConstraints.length > 0
+      ? `${trimmed}\n\n[搜尋限制]\n- ${searchConstraints.join('\n- ')}`
+      : trimmed;
+
     const userMessage = {
       id: createId(),
       role: 'user',
@@ -1335,6 +1381,7 @@ export default function App() {
     };
 
     const outgoingMessages = [...messages, userMessage];
+    const requestMessages = [...messages, { ...userMessage, content: messageForModel }];
 
     setMessages(outgoingMessages);
     setComposerText('');
@@ -1364,7 +1411,7 @@ export default function App() {
         method: 'POST',
         headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
-          messages: outgoingMessages.map((item) => ({
+          messages: requestMessages.map((item) => ({
             role: item.role,
             content: item.content,
           })),
@@ -2351,6 +2398,41 @@ export default function App() {
               </div>
 
               <div className="chat-composer">
+                <div className="search-options">
+                  <label className="search-option-item">
+                    <input
+                      type="checkbox"
+                      checked={replaceSearchResults}
+                      onChange={(event) => setReplaceSearchResults(event.target.checked)}
+                    />
+                    新搜尋覆蓋舊結果
+                  </label>
+                  <label className="search-option-item">
+                    預設期間
+                    <select
+                      className="search-option-select"
+                      value={defaultRecentDays}
+                      onChange={(event) => setDefaultRecentDays(clampInteger(event.target.value, 7, 1, 30))}
+                    >
+                      <option value={3}>近 3 天</option>
+                      <option value={7}>近 7 天</option>
+                      <option value={14}>近 14 天</option>
+                      <option value={30}>近 30 天</option>
+                    </select>
+                  </label>
+                  <label className="search-option-item">
+                    結果上限
+                    <input
+                      className="search-option-input"
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={maxSearchResults}
+                      onChange={(event) => setMaxSearchResults(clampInteger(event.target.value, 10, 1, 50))}
+                    />
+                    則
+                  </label>
+                </div>
                 <TextArea
                   rows={3}
                   value={composerText}

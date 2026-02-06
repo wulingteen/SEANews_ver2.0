@@ -46,6 +46,23 @@ from excel_service import (
     extract_country_from_content
 )
 from news_store import news_store
+from prompt_config import (
+    TEAM_INSTRUCTIONS,
+    EXPECTED_OUTPUT,
+    RAG_AGENT_INSTRUCTIONS,
+    RESEARCH_INSTRUCTIONS_BASE,
+    RESEARCH_INSTRUCTIONS_SUFFIX,
+    SMALLTALK_INSTRUCTIONS_BASE,
+    ROUTER_INSTRUCTIONS_BASE,
+    VISION_INSTRUCTIONS,
+    FORMATTER_INSTRUCTIONS,
+    OCR_PROMPT,
+    SMALLTALK_PROMPT_WITH_USER,
+    SMALLTALK_PROMPT_DEFAULT,
+    ROUTER_PROMPT_TEMPLATE,
+    TEAM_PROMPT_TEMPLATE,
+    FORMATTER_REPAIR_PROMPT_TEMPLATE,
+)
 
 
 # Robust .env loader to avoid parser crashes on some environments.
@@ -94,84 +111,7 @@ TRUSTED_NEWS_SOURCES = [
     {"name": "Heaptalk", "domain": "heaptalk.com", "region": "Southeast Asia"},
 ]
 
-TEAM_INSTRUCTIONS = [
-    "你是東南亞新聞輿情分析助理，專精於東南亞區域新聞搜尋、翻譯與深度分析。",
-    "你可以與使用者自然對話，協助搜尋、摘要、翻譯東南亞各國的新聞資訊。",
-    "",
-    "【重要】根據使用者意圖選擇回覆模式：",
-    "1. 問候/閒聊（如 hi, hello, 你好）→ 使用「簡單模式」",
-    "2. 需要新聞文件分析（如 摘要、翻譯）→ 使用「完整模式」並委派 RAG Agent（文件檢索）",
-    "3. 需要搜尋新聞/市場資訊（新聞、產業動態、政策變化）→ 使用「新聞搜尋模式」並委派 Deep Research Agent，必須使用 web_search 工具執行深度搜尋，優先搜尋信任新聞來源。",
-    "4. 使用者提供截圖/照片/影像 → 委派 Vision Agent 讀圖與 OCR，並回傳重點與文字內容。",
-    "若本次任務包含 OCR 文字，請在 summary.output 產出該文件的摘要。",
-    "",
-    "【新聞搜尋模式 - 輸出格式要求】",
-    "外層回覆必須是嚴格 JSON（不得有 code fence 或多餘說明）。",
-    "當執行新聞搜尋時，assistant.content 必須包含 Markdown 格式的新聞列表，每則新聞包含：",
-    "- 新聞標題（使用 ### 標記）",
-    "- 發布時間（格式：YYYY-MM-DD 或 YYYY年MM月DD日）",
-    "- 新聞摘要（1-2 段文字）",
-    "- 新聞來源連結（完整 URL）",
-    "",
-    "assistant.content 範例格式：",
-    "### 越南央行宣布降息 0.5 個百分點",
-    "發布時間：2025-12-28",
-    "越南國家銀行（SBV）今日宣布將基準利率下調 0.5 個百分點至 4.5%，這是今年第三次降息。此舉旨在刺激經濟成長並支持企業融資。",
-    "https://vnexpress.net/economy/example-url",
-    "",
-    "### 泰國通過新投資促進法案",
-    "發布時間：2025-12-27",
-    "泰國內閣批准新的投資促進法案，為外國投資者提供最高 8 年的稅收優惠。重點產業包括電動車、數位經濟和生物科技。",
-    "https://bangkokpost.com/business/example-url",
-    "",
-    "【簡單模式】僅填充 assistant.content，其他欄位必須為空或空陣列：",
-    '{"assistant": {"content": "你好！我是東南亞新聞輿情分析助理，可以協助您搜尋、摘要、翻譯東南亞各國新聞。有什麼我能幫忙的嗎？", "bullets": []}, "summary": {"output": "", "borrower": null, "metrics": [], "risks": []}, "translation": {"output": "", "clauses": []}, "memo": {"output": "", "sections": [], "recommendation": "", "conditions": ""}, "routing": []}',
-    "",
-    "【完整模式】填充相關 artifacts 並記錄 routing 步驟",
-    "",
-    "【JSON 格式要求】",
-    "- 回覆必須是嚴格 JSON，不可輸出 Markdown code fence 或多餘說明",
-    "- summary.output 與 memo.output 用繁體中文",
-    "- summary.output 中不要使用國家名稱（如 ##越南、##泰國、##Vietnam 等）作為標題，直接描述內容即可",
-    "- translation.output 與 translation.clauses[].translated 用英文",
-    "- summary.source_doc_id 與 translation.source_doc_id 必須填入來源文件的 id（見文件清單中的 id）",
-    "- 若來源為多份文件，可使用 summary.source_doc_ids / translation.source_doc_ids 陣列",
-    "- summary.risks[].level 僅能是 High、Medium、Low",
-    "- routing 由系統填寫，請回傳空陣列 []",
-]
 
-EXPECTED_OUTPUT = """
-簡單模式範例（問候/閒聊）：
-{
-  "assistant": { "content": "你好！我是東南亞新聞輿情分析助理，可以協助您搜尋、摘要、翻譯東南亞各國新聞。有什麼我能幫忙的嗎？", "bullets": [] },
-  "summary": { "output": "", "borrower": null, "metrics": [], "risks": [], "source_doc_id": "" },
-  "translation": { "output": "", "clauses": [], "source_doc_id": "" },
-  "memo": { "output": "", "sections": [], "recommendation": "", "conditions": "" },
-  "routing": []
-}
-
-完整模式範例（新聞搜尋/分析）：
-{
-  "assistant": { "content": "已完成新聞搜尋與分析", "bullets": ["搜尋東南亞新聞來源", "提取關鍵資訊", "生成摘要分析"] },
-  "summary": {
-    "output": "## 新聞摘要\n找到 5 篇相關新聞...",
-    "source_doc_id": "news-1",
-    "borrower": { "name": "新聞標題", "description": "來源與摘要", "rating": "" },
-    "metrics": [{ "label": "發布時間", "value": "2025-12-29", "delta": "" }],
-    "risks": [{ "label": "資訊可信度", "level": "Low" }]
-  },
-  "translation": { "output": "", "clauses": [], "source_doc_id": "" },
-  "memo": { "output": "", "sections": [], "recommendation": "", "conditions": "" },
-  "routing": []
-}
-""".strip()
-
-RAG_AGENT_INSTRUCTIONS = [
-    "你是文件檢索與解析專員，負責使用 RAG 搜尋上傳文件。",
-    "收到任務後，先使用 search_knowledge_base 工具檢索相關片段。",
-    "回覆請列出與需求最相關的摘錄與頁碼/段落資訊，避免編造。",
-    "若找不到相關內容，請明確回覆『未找到相關段落』。",
-]
 
 # Lazy initialization to avoid startup errors if dependencies are missing
 _rag_store = None
@@ -596,7 +536,8 @@ def get_research_model_id() -> str:
 
 
 def get_router_model_id() -> str:
-    return os.getenv("OPENAI_ROUTER_MODEL", get_model_id())
+    # 路由判斷優先使用低延遲模型，避免阻塞整體請求
+    return os.getenv("OPENAI_ROUTER_MODEL", "gpt-4o-mini")
 
 
 def build_system_status(
@@ -752,7 +693,7 @@ def run_ocr_for_documents(documents: List[Document]) -> List[Dict[str, Any]]:
         if not images:
             continue
         try:
-            prompt = "請針對這張圖片做 OCR，輸出純文字內容，不要加入多餘說明。"
+            prompt = OCR_PROMPT
             resp = agent.run(prompt, images=images)
             text = (resp.get_content_as_string() or "").strip()
             if not text:
@@ -841,6 +782,8 @@ def normalize_response_payload(payload: Any) -> Dict[str, Any]:
         return base
 
     # Assistant content
+    if isinstance(payload.get("assistant.content"), str) and not payload.get("assistant"):
+        base["assistant"]["content"] = payload.get("assistant.content", "")
     assistant = payload.get("assistant")
     if isinstance(assistant, dict):
         base["assistant"] = {
@@ -878,6 +821,44 @@ def extract_payload_from_response(response: Any) -> Dict[str, Any]:
         return normalize_response_payload(content)
     text = response.get_content_as_string()
     return normalize_response_payload(safe_parse_json(text))
+
+
+def needs_format_retry(payload: Dict[str, Any], use_web_search: bool) -> bool:
+    assistant_content = (payload.get("assistant") or {}).get("content", "").strip()
+    if not assistant_content:
+        return True
+    if use_web_search and "###" not in assistant_content:
+        return True
+    return False
+
+
+def sanitize_no_questions(text: str) -> str:
+    """Remove follow-up questions and question marks to enforce no-ask policy."""
+    if not text:
+        return text
+    text = text.replace("？", "。").replace("?", ".")
+    lines = text.splitlines()
+    filtered: List[str] = []
+    drop_keywords = ("請確認", "請告訴我", "是否接受", "是否有", "請回覆", "請指定", "請問", "請提供", "請選擇")
+    for line in lines:
+        if any(keyword in line for keyword in drop_keywords):
+            continue
+        filtered.append(line)
+    return "\n".join(filtered).strip()
+
+
+def build_formatter_agent() -> Agent:
+    """將非結構化內容修成 ArtifactResponse JSON"""
+    model = get_model()
+    return Agent(
+        name="Formatter",
+        role="將內容轉為嚴格 JSON，僅做格式修復，不新增事實",
+        model=model,
+        output_schema=ArtifactResponse,
+        use_json_mode=True,
+        instructions=FORMATTER_INSTRUCTIONS,
+        markdown=False,
+    )
 
 
 def compute_tag_key(data: bytes) -> str:
@@ -973,17 +954,15 @@ def parse_news_articles_streaming(content: str) -> List[Dict[str, str]]:
     return articles
 
 
-def extract_assistant_content_from_json(raw: str) -> str:
-    """從尚未完成的 JSON 字串中解析 assistant.content（容錯、不阻塞）"""
-    if not raw:
+def extract_json_string_field(raw: str, field_name: str) -> str:
+    """從尚未完成的 JSON 字串中解析指定欄位（容錯、不阻塞）"""
+    if not raw or not field_name:
         return ""
-    idx = raw.find('"assistant"')
+    needle = f'"{field_name}"'
+    idx = raw.find(needle)
     if idx == -1:
         return ""
-    idx = raw.find('"content"', idx)
-    if idx == -1:
-        return ""
-    idx = raw.find(":", idx)
+    idx = raw.find(":", idx + len(needle))
     if idx == -1:
         return ""
     i = idx + 1
@@ -1040,6 +1019,23 @@ def extract_assistant_content_from_json(raw: str) -> str:
         out.append(ch)
         i += 1
     return "".join(out)
+
+
+def extract_assistant_content_from_json(raw: str) -> str:
+    """從尚未完成的 JSON 字串中解析 assistant.content（容錯、不阻塞）"""
+    if not raw:
+        return ""
+    # Common incorrect key fallback
+    fallback = extract_json_string_field(raw, "assistant.content")
+    if fallback:
+        return fallback
+    idx = raw.find('"assistant"')
+    if idx == -1:
+        return ""
+    idx = raw.find('"content"', idx)
+    if idx == -1:
+        return ""
+    return extract_json_string_field(raw[idx:], "content")
 
 
 def make_news_key(article: Dict[str, str]) -> str:
@@ -1141,6 +1137,7 @@ def build_research_document(
 ) -> Optional[Dict[str, Any]]:
     if not use_web_search:
         return None
+
     resolved_user_id = user_id or REQUEST_USER_ID_CTX.get()
 
     content_parts: List[str] = []
@@ -1231,13 +1228,7 @@ def build_smalltalk_agent(
         role="簡短且親切的新聞情報助理，僅做寒暄或確認需求，不要主動生成報告。",
         model=get_model(),
         store_events=STORE_EVENTS,
-        instructions=[
-            "你是東南亞新聞情報助理，可以協助新聞檢索、情報分析、文件摘要等工作。",
-            "請參考對話紀錄延續脈絡，避免忽略先前內容。",
-            "當用戶詢問「目前有哪些新聞」或「系統狀態」時，請根據下方系統狀態資訊回答。",
-            "保持一句或兩句的自然回應，確認需求即可。",
-            "不要承諾開始產出報告或分析；請詢問使用者需要什麼協助。",
-            "語氣友善、簡潔，避免冗長。",
+        instructions=SMALLTALK_INSTRUCTIONS_BASE + [
             "",
             f"【系統當前狀態】\n{system_status}",
         ],
@@ -1254,15 +1245,7 @@ def build_router_agent(
         name="Router",
         role="判斷使用者需求要走哪種處理模式",
         model=get_model(model_id=get_router_model_id()),
-        instructions=[
-            "你是路由器，負責判斷是否需要簡單回覆或完整處理。",
-            "請輸出 JSON，符合 schema：",
-            '{ "mode": "simple|full", "needs_web_search": true|false, "needs_rag": true|false, "needs_vision": true|false, "reason": "簡短原因" }',
-            "僅在問候/寒暄/致謝且不需要工具時才回 simple。",
-            "若需要最新/外部資訊 → needs_web_search = true。",
-            "若需要讀取或摘要/翻譯使用者上傳文件 → needs_rag = true。",
-            "若需要解析影像/截圖/掃描件 → needs_vision = true。",
-            "不允許輸出多餘文字，只能輸出 JSON。",
+        instructions=ROUTER_INSTRUCTIONS_BASE + [
             "",
             f"【系統當前狀態】\n{system_status}",
         ],
@@ -1274,8 +1257,8 @@ def build_smalltalk_prompt(messages: List[Message]) -> str:
     convo = build_conversation(messages)
     last_user = get_last_user_message(messages)
     if last_user:
-        return f"{convo}\n\n使用者最新訊息：{last_user}\n\n請根據對話紀錄簡短回覆。"
-    return f"{convo}\n\n請簡短回覆。"
+        return SMALLTALK_PROMPT_WITH_USER.format(convo=convo, last_user=last_user)
+    return SMALLTALK_PROMPT_DEFAULT.format(convo=convo)
 
 
 def run_smalltalk_agent(
@@ -1353,7 +1336,7 @@ def run_router_agent(
         print(f"🤔 [LLM路由] 使用模型判斷路由")
         router = build_router_agent(documents, system_context)
         convo = build_conversation(messages)
-        prompt = f"{convo}\n\n請判斷路由並輸出 JSON。"
+        prompt = ROUTER_PROMPT_TEMPLATE.format(convo=convo)
         resp = router.run(prompt, output_schema=RouteDecision)
         content = getattr(resp, "content", None)
         if isinstance(content, RouteDecision):
@@ -1457,23 +1440,36 @@ def format_tool_label(tool_name: Optional[str]) -> str:
 
 def build_routing_update(event: Any, routing_state: Dict[str, str]) -> Optional[Dict[str, str]]:
     event_name = getattr(event, "event", "") or ""
-    
+    normalized_event = event_name.replace("_", "").lower()
+
+    def matches(*names: str) -> bool:
+        normalized_candidates = {
+            (name or "").replace("_", "").lower()
+            for name in names
+            if name
+        }
+        return normalized_event in normalized_candidates
+
     # 添加詳細日誌以便調試
     print(f"🔍 [路由事件] {event_name}")
-    
+
     # 推理事件 → 需求分析階段（思考中）
-    if event_name in {
+    if matches(
         "ReasoningStarted", "TeamReasoningStarted",
         "ReasoningStep", "TeamReasoningStep",
-        "ReasoningContentDelta", "TeamReasoningContentDelta"
-    }:
+        "ReasoningContentDelta", "TeamReasoningContentDelta",
+    ):
         step_id = "reasoning-thinking"
         routing_state.setdefault(step_id, step_id)
         print(f"🧠 [推理更新] LLM 正在思考中...")
         return {"id": step_id, "label": "AI 思考中", "status": "running", "eta": "分析指示...", "stage": "analyze"}
 
     # TeamRunContent 或 RunContent 事件 → 搜尋資料階段
-    if event_name in {"TeamRunContent", "RunContent"}:
+    if matches(
+        "TeamRunContent", "RunContent",
+        TeamRunEvent.run_content.value,
+        RunEvent.run_content.value,
+    ):
         step_id = "content-generation"
         routing_state.setdefault(step_id, step_id)
         print(f"✅ [路由更新] 開始生成內容 → 搜尋資料階段")
@@ -1481,13 +1477,25 @@ def build_routing_update(event: Any, routing_state: Dict[str, str]) -> Optional[
 
     # TeamRunContentCompleted 或 RunContentCompleted 或 TeamRunCompleted 或 RunCompleted → 處理內容階段（藍色 running）
     # 這些事件表示 AI 生成完成，但後端還在處理（解析新聞、儲存到資料庫等）
-    if event_name in {"TeamRunContentCompleted", "RunContentCompleted", "TeamRunCompleted", "RunCompleted"}:
+    if matches(
+        "TeamRunContentCompleted", "RunContentCompleted",
+        "TeamRunCompleted", "RunCompleted",
+        TeamRunEvent.run_content_completed.value,
+        RunEvent.run_content_completed.value,
+        TeamRunEvent.run_completed.value,
+        RunEvent.run_completed.value,
+    ):
         step_id = "content-processing"
         routing_state.setdefault(step_id, step_id)
         print(f"✅ [路由更新] {event_name} → 處理內容階段（藍色，正在儲存新聞）")
         return {"id": step_id, "label": "處理內容", "status": "running", "eta": "進行中", "stage": "process"}
 
-    if event_name in {TeamRunEvent.run_started.value, RunEvent.run_started.value}:
+    if matches(
+        TeamRunEvent.run_started.value,
+        RunEvent.run_started.value,
+        "TeamRunStarted",
+        "RunStarted",
+    ):
         step_id = "run-main"
         routing_state.setdefault(step_id, step_id)
         print(f"✅ [路由更新] 模型生成開始")
@@ -1497,17 +1505,29 @@ def build_routing_update(event: Any, routing_state: Dict[str, str]) -> Optional[
     # if event_name in {TeamRunEvent.run_completed.value, RunEvent.run_completed.value}:
     #     已經在上面統一處理為「處理內容」階段
 
-    if event_name in {TeamRunEvent.run_error.value, RunEvent.run_error.value}:
+    if matches(TeamRunEvent.run_error.value, RunEvent.run_error.value, "TeamRunError", "RunError"):
         step_id = "run-main"
         routing_state.setdefault(step_id, step_id)
         return {"id": step_id, "label": "模型生成", "status": "done", "eta": "失敗"}
 
-    if event_name in {TeamRunEvent.tool_call_started.value, RunEvent.tool_call_started.value}:
+    if matches(
+        TeamRunEvent.tool_call_started.value,
+        RunEvent.tool_call_started.value,
+        "ToolCallStarted",
+        "TeamToolCallStarted",
+    ):
         tool = getattr(event, "tool", None)
-        tool_name = getattr(tool, "tool_name", None)
-        tool_key = getattr(tool, "tool_call_id", None)
+        tool_name = (
+            getattr(tool, "tool_name", None)
+            or getattr(event, "tool_name", None)
+        )
+        tool_key = (
+            getattr(tool, "tool_call_id", None)
+            or getattr(event, "tool_call_id", None)
+        )
         if not tool_key:
-            tool_key = f"{tool_name or 'tool'}-{getattr(tool, 'created_at', '')}"
+            created_at = getattr(tool, "created_at", None) or getattr(event, "created_at", "")
+            tool_key = f"{tool_name or 'tool'}-{created_at}"
         routing_state.setdefault(tool_key, tool_key)
         label = format_tool_label(tool_name)
         print(f"✅ [路由更新] 工具調用開始: {label}")
@@ -1519,12 +1539,24 @@ def build_routing_update(event: Any, routing_state: Dict[str, str]) -> Optional[
             "stage": "search",  # 工具調用也算在搜尋資料階段
         }
 
-    if event_name in {TeamRunEvent.tool_call_completed.value, RunEvent.tool_call_completed.value}:
+    if matches(
+        TeamRunEvent.tool_call_completed.value,
+        RunEvent.tool_call_completed.value,
+        "ToolCallCompleted",
+        "TeamToolCallCompleted",
+    ):
         tool = getattr(event, "tool", None)
-        tool_name = getattr(tool, "tool_name", None)
-        tool_key = getattr(tool, "tool_call_id", None)
+        tool_name = (
+            getattr(tool, "tool_name", None)
+            or getattr(event, "tool_name", None)
+        )
+        tool_key = (
+            getattr(tool, "tool_call_id", None)
+            or getattr(event, "tool_call_id", None)
+        )
         if not tool_key:
-            tool_key = f"{tool_name or 'tool'}-{getattr(tool, 'created_at', '')}"
+            created_at = getattr(tool, "created_at", None) or getattr(event, "created_at", "")
+            tool_key = f"{tool_name or 'tool'}-{created_at}"
         routing_state.setdefault(tool_key, tool_key)
         label = format_tool_label(tool_name)
         print(f"✅ [路由更新] 工具調用完成: {label}")
@@ -1533,20 +1565,34 @@ def build_routing_update(event: Any, routing_state: Dict[str, str]) -> Optional[
             "label": label,
             "status": "done",
             "eta": "",
+            "stage": "search",
         }
 
-    if event_name in {TeamRunEvent.tool_call_error.value, RunEvent.tool_call_error.value}:
+    if matches(
+        TeamRunEvent.tool_call_error.value,
+        RunEvent.tool_call_error.value,
+        "ToolCallError",
+        "TeamToolCallError",
+    ):
         tool = getattr(event, "tool", None)
-        tool_key = getattr(tool, "tool_call_id", None)
+        tool_name = (
+            getattr(tool, "tool_name", None)
+            or getattr(event, "tool_name", None)
+        )
+        tool_key = (
+            getattr(tool, "tool_call_id", None)
+            or getattr(event, "tool_call_id", None)
+        )
         if not tool_key:
-            tool_name = getattr(tool, "tool_name", None) or "tool"
-            tool_key = f"{tool_name}-{getattr(tool, 'created_at', '')}"
+            created_at = getattr(tool, "created_at", None) or getattr(event, "created_at", "")
+            tool_key = f"{tool_name or 'tool'}-{created_at}"
         routing_state.setdefault(tool_key, tool_key)
         return {
             "id": routing_state[tool_key],
-            "label": format_tool_label(getattr(tool, "tool_name", None)),
+            "label": format_tool_label(tool_name),
             "status": "done",
             "eta": "失敗",
+            "stage": "search",
         }
 
     return None
@@ -1707,87 +1753,39 @@ def build_rag_agent(doc_ids: List[str], model: OpenAIChat) -> Agent:
     )
 
 
-def build_research_agent() -> Agent:
-    """建立 Deep Research Agent，專門執行東南亞新聞搜尋"""
-    model = get_model(enable_web_search=True, model_id=get_research_model_id())
-    
-    # 構建按區域分組的 site: 語法查詢模板
-    region_site_queries = {}
-    for src in TRUSTED_NEWS_SOURCES:
+def build_site_query_templates(sources: List[Dict[str, str]]) -> str:
+    region_site_queries: Dict[str, List[str]] = {}
+    for src in sources:
         region = src["region"]
         if region not in region_site_queries:
             region_site_queries[region] = []
         region_site_queries[region].append(f"site:{src['domain']}")
-    
-    # 構建每個區域的完整 site: OR 查詢
-    region_queries = {}
+
+    region_queries: Dict[str, str] = {}
     for region, sites in region_site_queries.items():
         region_queries[region] = " OR ".join(sites)
+
+    return "\n".join([f"  - {region}: ({sites})" for region, sites in region_queries.items()])
+
+
+def build_research_agent() -> Agent:
+    """建立 Deep Research Agent，專門執行東南亞新聞搜尋"""
+    model = get_model(enable_web_search=True, model_id=get_research_model_id())
     
-    # 構建指令文字
-    query_templates = "\n".join([
-        f"  - {region}: ({sites})"
-        for region, sites in region_queries.items()
-    ])
+    query_templates = build_site_query_templates(TRUSTED_NEWS_SOURCES)
     
+    instructions = RESEARCH_INSTRUCTIONS_BASE + [
+        "【信任網域查詢模板 - 直接複製使用】",
+        query_templates,
+        "",
+    ] + RESEARCH_INSTRUCTIONS_SUFFIX
+
     return Agent(
         name="Deep Research Agent",
         role="東南亞新聞深度搜尋專員",
         model=model,
         # Web search 工具不支援 JSON mode；此處避免強制 JSON mode
-        instructions=[
-            "你是東南亞新聞搜尋專員，負責使用 web_search 工具搜尋東南亞各國新聞。",
-            "",
-            "【核心規則 - 必須遵守】",
-            "[WARNING] 每次搜尋都必須使用 site: 語法限定信任網域，絕對不可省略！",
-            "[WARNING] 搜尋查詢格式：<關鍵字> <site語法> <時間限制>",
-            "",
-            "【信任網域查詢模板 - 直接複製使用】",
-            query_templates,
-            "",
-            "【搜尋步驟】",
-            "1. 識別使用者要查詢的區域（Vietnam/Thailand/Singapore/Cambodia等）",
-            "2. 從上方模板複製對應區域的完整 site: 語法",
-            "3. 組合完整查詢：<使用者關鍵字> <site語法> after:<日期>",
-            "4. 使用 web_search 工具執行搜尋",
-            "",
-            "【正確查詢範例】",
-            "✅ Vietnam fintech (site:viet-jo.com OR site:cafef.vn OR site:vnexpress.net OR site:vietnamfinance.vn OR site:vir.com.vn OR site:vietnambiz.vn OR site:tapchikinhtetaichinh.vn) after:2025-12-20",
-            "✅ Singapore央行政策 (site:fintechnews.sg) after:2025-12-01",
-            "✅ Thailand數位支付 (site:bangkokpost.com OR site:techsauce.co) after:2025-12-15",
-            "",
-            "【錯誤查詢範例 - 禁止使用】",
-            "❌ Vietnam fintech news  (缺少 site: 語法)",
-            "❌ fintech site:google.com  (使用了非信任網域)",
-            "❌ Singapore news  (沒有限定網域)",
-            "",
-            "【輸出格式 - JSON 外層 + Markdown 內文】",
-            "你必須回傳嚴格 JSON（不得有 code fence 或多餘說明），其中 assistant.content 需是 Markdown 新聞列表。",
-            "assistant.content 的每則新聞包含：",
-            "- 標題（使用 ### 標記）",
-            "- 發布時間（格式：YYYY-MM-DD 或 YYYY年MM月DD日）",
-            "- 新聞摘要（1-3 段簡潔說明）",
-            "- 新聞來源連結（完整 URL）",
-            "- 每則新聞之間用空行分隔",
-            "",
-            "assistant.content 範例：",
-            "### 越南央行宣布降息 0.5 個百分點",
-            "發布時間：2025-12-28",
-            "越南國家銀行（SBV）今日宣布將基準利率下調 0.5 個百分點至 4.5%，這是今年第三次降息。此舉旨在刺激經濟成長並支持企業融資。",
-            "https://vnexpress.net/economy/example-url",
-            "",
-            "### 泰國通過新投資促進法案",
-            "發布時間：2025-12-27",
-            "泰國內閣批准新的投資促進法案，為外國投資者提供最高 8 年的稅收優惠。重點產業包括電動車、數位經濟和生物科技。",
-            "https://bangkokpost.com/business/example-url",
-            "",
-            "【重要提醒】",
-            "- 回覆外層必須是嚴格 JSON（不要輸出 code fence 或額外說明），但 assistant.content 內文需是 Markdown 新聞列表",
-            "- 每則新聞都要包含完整的 URL 連結",
-            "- 絕對不可省略 site: 語法",
-            "- 驗證每個結果的網域是否在信任清單中",
-            "- 若找不到信任來源的新聞，建議擴大時間範圍或調整關鍵字",
-        ],
+        instructions=instructions,
         tools=[WEB_SEARCH_TOOL],
         search_knowledge=True,
         add_knowledge_to_context=True,
@@ -1801,10 +1799,7 @@ def build_vision_agent() -> Agent:
         name="Vision Agent",
         role="影像/截圖理解與OCR",
         model=model,
-        instructions=[
-            "專注於解析上傳的截圖、照片或文件圖片，描述關鍵內容與文字。",
-            "若沒有影像可讀，請要求使用者提供圖片或確認格式。",
-        ],
+        instructions=VISION_INSTRUCTIONS,
         markdown=False,
     )
 
@@ -2187,87 +2182,14 @@ async def generate_artifacts(request: Request, req: ArtifactRequest):
     try:
         import time
         start_time = time.time()
-        
+
         last_user = get_last_user_message(req.messages)
-        
-        print(f"⏱️ [計時] 開始路由判斷")
-        route = run_router_agent(req.messages, req.documents, req.system_context)
-        route_time = time.time() - start_time
-        print(f"⏱️ [計時] 路由判斷完成，耗時: {route_time:.2f}秒, 結果: {route}")
-        
-        if route and route.mode == "simple":
-            # Return SSE format if streaming is requested
-            if req.stream:
-                agent = build_smalltalk_agent(req.documents, req.system_context)
-                smalltalk_prompt = build_smalltalk_prompt(req.messages)
-                response = agent.run(smalltalk_prompt or "你好", stream=True, stream_events=True)
-
-                async def generate_smalltalk_sse():
-                    accumulated = ""
-                    reasoning_fragments: List[str] = []
-                    try:
-                        routing_update = {
-                            "id": "run-main",
-                            "label": "模型生成",
-                            "status": "running",
-                            "eta": "進行中",
-                        }
-                        yield f"data: {json.dumps({'routing_update': routing_update})}\n\n"
-                        for event in response:
-                            trace_event = map_event_to_trace_event(event)
-                            if trace_event:
-                                yield f"data: {json.dumps({'trace_event': trace_event})}\n\n"
-
-                            reasoning_text = extract_reasoning_text(event)
-                            if reasoning_text:
-                                reasoning_fragments.append(reasoning_text)
-
-                            content = extract_stream_text(event)
-                            if not content:
-                                continue
-                            accumulated += content
-                            yield f"data: {json.dumps({'chunk': content})}\n\n"
-
-                        final_data = build_empty_response(
-                            accumulated
-                            or "你好！我是授信報告助理，可以協助摘要、翻譯、風險評估與授信報告草稿。"
-                        )
-                        final_data["routing"] = [
-                            {
-                                "id": "run-main",
-                                "label": "模型生成",
-                                "status": "done",
-                                "eta": "完成",
-                            }
-                        ]
-                        if reasoning_fragments:
-                            final_data["reasoning_summary"] = build_reasoning_summary(reasoning_fragments)
-                        yield f"data: {json.dumps(final_data)}\n\n"
-                    except Exception as exc:
-                        error_response = build_empty_response(f"處理過程中發生錯誤：{str(exc)}")
-                        yield f"data: {json.dumps(error_response)}\n\n"
-                    yield f"data: {json.dumps({'done': True})}\n\n"
-
-                return StreamingResponse(
-                    generate_smalltalk_sse(),
-                    media_type="text/event-stream",
-                    headers=SSE_HEADERS,
-                )
-
-            reply = run_smalltalk_agent(
-                req.messages, req.documents, req.system_context
-            )
-            response_data = build_empty_response(reply)
-            return response_data
 
         convo = build_conversation(req.messages)
         image_inputs = build_image_inputs(req.documents)
 
         # Add system status to prompt for Team
         system_status = build_system_status(req.documents, req.system_context)
-        use_web_search = bool(route and route.needs_web_search)
-        use_rag = bool(route and route.needs_rag)
-        use_vision = bool(route and route.needs_vision) or bool(image_inputs)
         if req.stream:
             async def generate_sse():
                 import time
@@ -2288,240 +2210,359 @@ async def generate_artifacts(request: Request, req: ArtifactRequest):
                 routing_log: List[Dict[str, str]] = []
                 ocr_updates: List[Dict[str, Any]] = []
                 reasoning_fragments: List[str] = []
+                route: Optional[RouteDecision] = None
+                use_web_search = False
+                use_rag = False
+                use_vision = bool(image_inputs)
 
                 try:
-                    if image_inputs:
-                        ocr_start = {
-                            "id": "ocr",
-                            "label": "OCR 解析",
+                    route_start = {
+                        "id": "route-decision",
+                        "label": "需求分析",
+                        "status": "running",
+                        "eta": "解析使用者意圖...",
+                        "stage": "analyze",
+                    }
+                    if update_routing_log(routing_log, route_start):
+                        yield f"data: {json.dumps({'routing_update': route_start})}\n\n"
+
+                    route_started_at = time.time()
+                    route = run_router_agent(req.messages, req.documents, req.system_context)
+                    route_duration = time.time() - route_started_at
+                    print(f"⏱️ [計時] 路由判斷完成，耗時: {route_duration:.2f}秒, 結果: {route}")
+
+                    route_done = {
+                        "id": "route-decision",
+                        "label": "需求分析",
+                        "status": "done",
+                        "eta": f"完成（{route_duration:.1f}秒）",
+                        "stage": "analyze",
+                    }
+                    if update_routing_log(routing_log, route_done):
+                        yield f"data: {json.dumps({'routing_update': route_done})}\n\n"
+
+                    if route and route.reason:
+                        route_reason = {
+                            "id": "route-result",
+                            "label": "路由結果",
+                            "status": "done",
+                            "eta": route.reason,
+                            "stage": "analyze",
+                        }
+                        if update_routing_log(routing_log, route_reason):
+                            yield f"data: {json.dumps({'routing_update': route_reason})}\n\n"
+
+                    if route and route.mode == "simple":
+                        agent = build_smalltalk_agent(req.documents, req.system_context)
+                        smalltalk_prompt = build_smalltalk_prompt(req.messages)
+                        response = agent.run(smalltalk_prompt or "你好", stream=True, stream_events=True)
+
+                        run_start = {
+                            "id": "run-main",
+                            "label": "模型生成",
                             "status": "running",
                             "eta": "進行中",
+                            "stage": "analyze",
                         }
-                        if update_routing_log(routing_log, ocr_start):
-                            yield f"data: {json.dumps({'routing_update': ocr_start})}\n\n"
-                        ocr_updates = run_ocr_for_documents(req.documents)
-                        ocr_done = {
-                            "id": "ocr",
-                            "label": "OCR 解析",
-                            "status": "done",
-                            "eta": "完成",
-                        }
-                        if update_routing_log(routing_log, ocr_done):
-                            yield f"data: {json.dumps({'routing_update': ocr_done})}\n\n"
+                        if update_routing_log(routing_log, run_start):
+                            yield f"data: {json.dumps({'routing_update': run_start})}\n\n"
 
-                    # RAG 索引已停用以提升速度，如需啟用請取消下方註解
-                    # ensure_inline_documents_indexed(req.documents)
-                    doc_ids = []
-                    # doc_ids = [
-                    #     doc.id
-                    #     for doc in req.documents
-                    #     if doc.id and doc.id in rag_store.docs
-                    # ]
-
-
-                    runner = None
-                    if use_web_search and not use_vision:
-                        # 優化：直接使用 Research Agent，跳過 Team Leader 推理以節省時間
-                        print(f"⚡ [優化] 直接使用 Research Agent (跳過 Team Leader)")
-                        runner = build_research_agent()
-                        timings["team_built"] = time.time()
-                    else:
-                        runner = build_team(
-                            doc_ids,
-                            enable_web_search=use_web_search,
-                            enable_vision=use_vision,
-                        )
-                        timings["team_built"] = time.time()
-                    
-                    print(f"⏱️ [計時] Runner 建立完成: {timings['team_built'] - timings['request_start']:.2f}s")
-
-                    if use_web_search:
-                         # 確保 Research Agent 也有這個屬性
-                         if hasattr(runner, 'tool_choice'):
-                             runner.tool_choice = WEB_SEARCH_TOOL
-                         else :
-                             # Agent 對象可能不直接支持 tool_choice，取決於 Agno 版本，但我們先保留邏輯
-                             pass
-
-
-                    doc_context = build_doc_context(
-                        req.documents,
-                        req.system_context.selected_doc_id if req.system_context else None,
-                        include_content=not use_web_search or use_rag or use_vision,
-                    )
-                    prompt = f"{convo}\n\n{system_status}\n\n{doc_context}\n\n請依規則產出 JSON。"
-
-                    run_start = {
-                        "id": "run-main",
-                        "label": "模型生成",
-                        "status": "running",
-                        "eta": "進行中",
-                    }
-                    if update_routing_log(routing_log, run_start):
-                        yield f"data: {json.dumps({'routing_update': run_start})}\n\n"
-
-                    response = runner.run(
-                        prompt,
-                        # dependencies={"doc_ids": doc_ids},  # RAG 已停用
-                        # add_dependencies_to_context=True,
-                        images=image_inputs if image_inputs else None,
-                        stream=True,
-                        stream_events=True,
-                    )
-
-                    for event in response:
-                        # 處理路由更新 - 即時發送給前端
-                        routing_update = build_routing_update(event, routing_state)
-                        if routing_update:
-                            log_line = f"🔧 [路由建立] 產生更新物件: {routing_update}"
-                            print(log_line)
-                            yield f"data: {json.dumps({'log_chunk': log_line})}\n\n"
-                            
-                            should_send = update_routing_log(routing_log, routing_update)
-                            log_line = f"🔍 [去重檢查] 是否發送: {should_send}"
-                            print(log_line)
-                            yield f"data: {json.dumps({'log_chunk': log_line})}\n\n"
-                            
-                            if should_send:
-                                log_line = f"📤 [即時推送] 路由更新: {routing_update}"
-                                print(log_line)
-                                yield f"data: {json.dumps({'log_chunk': log_line})}\n\n"
-                                yield f"data: {json.dumps({'routing_update': routing_update})}\n\n"
-
-                        # 推送事件名稱日誌
-                        event_name = getattr(event, "event", "") or ""
-                        if event_name:
-                            log_line = f"🔍 [路由事件] {event_name}"
-                            print(log_line)
-                            yield f"data: {json.dumps({'log_chunk': log_line})}\n\n"
-
-                        # Capture structured payloads when available (JSON output schema)
-                        payload = getattr(event, "content", None)
-                        if isinstance(payload, BaseModel):
-                            payload = payload.model_dump()
-                        if isinstance(payload, dict) and any(
-                            key in payload for key in ("assistant", "summary", "translation", "memo")
-                        ):
-                            final_payload = normalize_response_payload(payload)
-
-                        # 提取推理過程（如果有）
-                        reasoning_text = extract_reasoning_text(event)
-                        if reasoning_text:
-                            reasoning_fragments.append(reasoning_text)
-                            log_line = f"🧠 [推理日誌] {reasoning_text[:200]}..."
-                            print(log_line)
-                            yield f"data: {json.dumps({'log_chunk': log_line})}\n\n"
-
-                        trace_event = map_event_to_trace_event(event)
-                        if trace_event:
-                            # 記錄 web_search 時間
-                            if trace_event.get("tool") == "web_search":
-                                if trace_event.get("type") == "tool_call" and not timings["web_search_start"]:
-                                    timings["web_search_start"] = time.time()
-                                    elapsed = timings["web_search_start"] - timings["request_start"]
-                                    print(f"⏱️ [計時] Web Search 開始: {elapsed:.2f}s")
-                                elif trace_event.get("type") != "tool_call" and not timings["web_search_end"]:
-                                    timings["web_search_end"] = time.time()
-                                    search_duration = timings["web_search_end"] - (timings["web_search_start"] or timings["request_start"])
-                                    print(f"⏱️ [計時] Web Search 完成: 耗時 {search_duration:.2f}s")
-                                
-                                search_status = "running" if trace_event.get("type") == "tool_call" else "done"
-                                search_label = trace_event.get("message", "網頁搜尋中...")
-                                web_search_update = {
-                                    "id": "web-search",
-                                    "label": search_label,
-                                    "status": search_status,
-                                    "eta": "搜尋進行中" if search_status == "running" else "完成",
-                                    "stage": "searching" if search_status == "running" else "complete",
-                                }
-                                yield f"data: {json.dumps({'routing_update': web_search_update})}\n\n"
-                            else:
+                        for event in response:
+                            trace_event = map_event_to_trace_event(event)
+                            if trace_event:
                                 yield f"data: {json.dumps({'trace_event': trace_event})}\n\n"
 
-                        content = extract_stream_text(event)
-                        if not content:
-                            continue
-                        # 記錄第一個內容時間
-                        if not timings["first_content"]:
-                            timings["first_content"] = time.time()
-                            elapsed = timings["first_content"] - timings["request_start"]
-                            print(f"⏱️ [計時] 首次內容輸出: {elapsed:.2f}s")
-                        accumulated += content
-                        yield f"data: {json.dumps({'chunk': content})}\n\n"
+                            reasoning_text = extract_reasoning_text(event)
+                            if reasoning_text:
+                                reasoning_fragments.append(reasoning_text)
 
-                        if use_web_search:
-                            assistant_content = extract_assistant_content_from_json(accumulated)
-                            source_for_parse = ""
-                            if assistant_content:
-                                source_for_parse = assistant_content
-                            elif "###" in accumulated:
-                                # Direct research output might be plain Markdown (non-JSON)
-                                source_for_parse = accumulated
+                            content = extract_stream_text(event)
+                            if not content:
+                                continue
+                            accumulated += content
+                            yield f"data: {json.dumps({'chunk': content})}\n\n"
 
-                            if source_for_parse and len(source_for_parse) > assistant_content_len:
-                                assistant_content_len = len(source_for_parse)
-                                articles = parse_news_articles_streaming(source_for_parse)
-                                new_docs = build_news_records_from_articles(
-                                    articles,
-                                    seen_keys=streamed_news_keys,
-                                    user_id=current_user_id,
-                                )
-                                if new_docs:
-                                    yield f"data: {json.dumps({'documents_append': new_docs})}\n\n"
+                        run_done = {
+                            "id": "run-main",
+                            "label": "模型生成",
+                            "status": "done",
+                            "eta": "完成",
+                            "stage": "complete",
+                        }
+                        if update_routing_log(routing_log, run_done):
+                            yield f"data: {json.dumps({'routing_update': run_done})}\n\n"
 
-
-                    run_done = {
-                        "id": "run-main",
-                        "label": "模型生成",
-                        "status": "done",
-                        "eta": "完成",
-                    }
-                    if update_routing_log(routing_log, run_done):
-                        yield f"data: {json.dumps({'routing_update': run_done})}\n\n"
-
-                    # Parse and send final complete message
-                    if accumulated or final_payload:
-                        if accumulated:
-                            final_data = normalize_response_payload(safe_parse_json(accumulated))
-                        else:
-                            final_data = final_payload or build_empty_response("")
-                        assistant_content = (final_data.get("assistant") or {}).get("content", "").strip()
-                        if not assistant_content:
-                            # Try to recover assistant.content from raw stream or use raw markdown
-                            recovered = extract_assistant_content_from_json(accumulated)
-                            if not recovered and "###" in accumulated:
-                                recovered = accumulated.strip()
-                            if recovered:
-                                final_data["assistant"] = {
-                                    "content": recovered,
-                                    "bullets": [],
-                                }
+                        final_data = build_empty_response(
+                            accumulated
+                            or "你好！我是授信報告助理，可以協助摘要、翻譯、風險評估與授信報告草稿。"
+                        )
                         if routing_log:
                             final_data["routing"] = routing_log
-                        if ocr_updates:
-                            final_data["documents_update"] = ocr_updates
-                        reasoning_summary = build_reasoning_summary(reasoning_fragments)
-                        if reasoning_summary:
-                            final_data["reasoning_summary"] = reasoning_summary
-                        news_docs = build_news_documents(
-                            final_data,
-                            last_user,
-                            use_web_search,
-                            seen_keys=streamed_news_keys,
-                            user_id=current_user_id,
-                        )
-                        if news_docs:
-                            existing_docs = final_data.get("documents_append") or []
-                            final_data["documents_append"] = existing_docs + news_docs
+                        if reasoning_fragments:
+                            final_data["reasoning_summary"] = build_reasoning_summary(reasoning_fragments)
                         yield f"data: {json.dumps(final_data)}\n\n"
                     else:
-                        # No content accumulated, send fallback response
-                        fallback = build_empty_response("抱歉，我無法完成這個請求。請稍後再試。")
-                        yield f"data: {json.dumps(fallback)}\n\n"
+                        use_web_search = bool(route and route.needs_web_search)
+                        use_rag = bool(route and route.needs_rag)
+                        use_vision = bool(route and route.needs_vision) or bool(image_inputs)
+
+                        if image_inputs:
+                            ocr_start = {
+                                "id": "ocr",
+                                "label": "OCR 解析",
+                                "status": "running",
+                                "eta": "進行中",
+                            }
+                            if update_routing_log(routing_log, ocr_start):
+                                yield f"data: {json.dumps({'routing_update': ocr_start})}\n\n"
+                            ocr_updates = run_ocr_for_documents(req.documents)
+                            ocr_done = {
+                                "id": "ocr",
+                                "label": "OCR 解析",
+                                "status": "done",
+                                "eta": "完成",
+                            }
+                            if update_routing_log(routing_log, ocr_done):
+                                yield f"data: {json.dumps({'routing_update': ocr_done})}\n\n"
+
+                        # RAG 索引已停用以提升速度，如需啟用請取消下方註解
+                        # ensure_inline_documents_indexed(req.documents)
+                        doc_ids = []
+                        # doc_ids = [
+                        #     doc.id
+                        #     for doc in req.documents
+                        #     if doc.id and doc.id in rag_store.docs
+                        # ]
+
+                        runner = None
+                        if use_web_search and not use_vision:
+                            # 優化：直接使用 Research Agent，跳過 Team Leader 推理以節省時間
+                            print(f"⚡ [優化] 直接使用 Research Agent (跳過 Team Leader)")
+                            runner = build_research_agent()
+                            timings["team_built"] = time.time()
+                        else:
+                            runner = build_team(
+                                doc_ids,
+                                enable_web_search=use_web_search,
+                                enable_vision=use_vision,
+                            )
+                            timings["team_built"] = time.time()
+
+                        print(f"⏱️ [計時] Runner 建立完成: {timings['team_built'] - timings['request_start']:.2f}s")
+
+                        if use_web_search:
+                            # 確保 Research Agent 也有這個屬性
+                            if hasattr(runner, 'tool_choice'):
+                                runner.tool_choice = WEB_SEARCH_TOOL
+
+                        doc_context = build_doc_context(
+                            req.documents,
+                            req.system_context.selected_doc_id if req.system_context else None,
+                            include_content=not use_web_search or use_rag or use_vision,
+                        )
+                        prompt = TEAM_PROMPT_TEMPLATE.format(
+                            convo=convo,
+                            system_status=system_status,
+                            doc_context=doc_context,
+                        )
+
+                        run_start = {
+                            "id": "run-main",
+                            "label": "模型生成",
+                            "status": "running",
+                            "eta": "進行中",
+                            "stage": "analyze",
+                        }
+                        if update_routing_log(routing_log, run_start):
+                            yield f"data: {json.dumps({'routing_update': run_start})}\n\n"
+
+                        response = runner.run(
+                            prompt,
+                            # dependencies={"doc_ids": doc_ids},  # RAG 已停用
+                            # add_dependencies_to_context=True,
+                            images=image_inputs if image_inputs else None,
+                            stream=True,
+                            stream_events=True,
+                        )
+
+                        for event in response:
+                            # 處理路由更新 - 即時發送給前端
+                            routing_update = build_routing_update(event, routing_state)
+                            if routing_update:
+                                log_line = f"🔧 [路由建立] 產生更新物件: {routing_update}"
+                                print(log_line)
+                                yield f"data: {json.dumps({'log_chunk': log_line})}\n\n"
+
+                                should_send = update_routing_log(routing_log, routing_update)
+                                log_line = f"🔍 [去重檢查] 是否發送: {should_send}"
+                                print(log_line)
+                                yield f"data: {json.dumps({'log_chunk': log_line})}\n\n"
+
+                                if should_send:
+                                    log_line = f"📤 [即時推送] 路由更新: {routing_update}"
+                                    print(log_line)
+                                    yield f"data: {json.dumps({'log_chunk': log_line})}\n\n"
+                                    yield f"data: {json.dumps({'routing_update': routing_update})}\n\n"
+
+                            # 推送事件名稱日誌
+                            event_name = getattr(event, "event", "") or ""
+                            if event_name:
+                                log_line = f"🔍 [路由事件] {event_name}"
+                                print(log_line)
+                                yield f"data: {json.dumps({'log_chunk': log_line})}\n\n"
+
+                            # Capture structured payloads when available (JSON output schema)
+                            payload = getattr(event, "content", None)
+                            if isinstance(payload, BaseModel):
+                                payload = payload.model_dump()
+                            if isinstance(payload, dict) and any(
+                                key in payload for key in ("assistant", "summary", "translation", "memo")
+                            ):
+                                final_payload = normalize_response_payload(payload)
+
+                            # 提取推理過程（如果有）
+                            reasoning_text = extract_reasoning_text(event)
+                            if reasoning_text:
+                                reasoning_fragments.append(reasoning_text)
+                                log_line = f"🧠 [推理日誌] {reasoning_text[:200]}..."
+                                print(log_line)
+                                yield f"data: {json.dumps({'log_chunk': log_line})}\n\n"
+
+                            trace_event = map_event_to_trace_event(event)
+                            if trace_event:
+                                # 記錄 web_search 時間
+                                if trace_event.get("tool") == "web_search":
+                                    if trace_event.get("type") == "tool_call" and not timings["web_search_start"]:
+                                        timings["web_search_start"] = time.time()
+                                        elapsed = timings["web_search_start"] - timings["request_start"]
+                                        print(f"⏱️ [計時] Web Search 開始: {elapsed:.2f}s")
+                                    elif trace_event.get("type") != "tool_call" and not timings["web_search_end"]:
+                                        timings["web_search_end"] = time.time()
+                                        search_duration = timings["web_search_end"] - (timings["web_search_start"] or timings["request_start"])
+                                        print(f"⏱️ [計時] Web Search 完成: 耗時 {search_duration:.2f}s")
+
+                                    search_status = "running" if trace_event.get("type") == "tool_call" else "done"
+                                    search_label = trace_event.get("message", "網頁搜尋中...")
+                                    web_search_update = {
+                                        "id": "web-search",
+                                        "label": search_label,
+                                        "status": search_status,
+                                        "eta": "搜尋進行中" if search_status == "running" else "搜尋完成",
+                                        "stage": "search",
+                                    }
+                                    yield f"data: {json.dumps({'routing_update': web_search_update})}\n\n"
+                                else:
+                                    yield f"data: {json.dumps({'trace_event': trace_event})}\n\n"
+
+                            content = extract_stream_text(event)
+                            if not content:
+                                continue
+                            # 記錄第一個內容時間
+                            if not timings["first_content"]:
+                                timings["first_content"] = time.time()
+                                elapsed = timings["first_content"] - timings["request_start"]
+                                print(f"⏱️ [計時] 首次內容輸出: {elapsed:.2f}s")
+                            accumulated += content
+                            yield f"data: {json.dumps({'chunk': content})}\n\n"
+
+                            if use_web_search:
+                                assistant_content = extract_assistant_content_from_json(accumulated)
+                                if not assistant_content:
+                                    assistant_content = extract_json_string_field(accumulated, "assistant.content")
+                                source_for_parse = ""
+                                if assistant_content:
+                                    source_for_parse = assistant_content
+                                elif "###" in accumulated:
+                                    # Direct research output might be plain Markdown (non-JSON)
+                                    source_for_parse = accumulated
+
+                                if source_for_parse and len(source_for_parse) > assistant_content_len:
+                                    assistant_content_len = len(source_for_parse)
+                                    articles = parse_news_articles_streaming(source_for_parse)
+                                    new_docs = build_news_records_from_articles(
+                                        articles,
+                                        seen_keys=streamed_news_keys,
+                                        user_id=current_user_id,
+                                    )
+                                    if new_docs:
+                                        yield f"data: {json.dumps({'documents_append': new_docs})}\n\n"
+
+                        run_done = {
+                            "id": "run-main",
+                            "label": "模型生成",
+                            "status": "done",
+                            "eta": "完成",
+                            "stage": "process",
+                        }
+                        if update_routing_log(routing_log, run_done):
+                            yield f"data: {json.dumps({'routing_update': run_done})}\n\n"
+
+                        # Parse and send final complete message
+                        if accumulated or final_payload:
+                            if accumulated:
+                                final_data = normalize_response_payload(safe_parse_json(accumulated))
+                            else:
+                                final_data = final_payload or build_empty_response("")
+                            assistant_content = (final_data.get("assistant") or {}).get("content", "").strip()
+                            if not assistant_content:
+                                # Try to recover assistant.content from raw stream or use raw markdown
+                                recovered = extract_assistant_content_from_json(accumulated)
+                                if not recovered:
+                                    recovered = extract_json_string_field(accumulated, "assistant.content")
+                                if not recovered and "###" in accumulated:
+                                    recovered = accumulated.strip()
+                                if recovered:
+                                    final_data["assistant"] = {
+                                        "content": recovered,
+                                        "bullets": [],
+                                    }
+                            if needs_format_retry(final_data, use_web_search):
+                                raw_text = assistant_content or extract_assistant_content_from_json(accumulated) or accumulated
+                                raw_text = (raw_text or "").strip()
+                                if raw_text:
+                                    raw_text = raw_text[-8000:]
+                                    formatter = build_formatter_agent()
+                                    repair_prompt = FORMATTER_REPAIR_PROMPT_TEMPLATE.format(raw_text=raw_text)
+                                    try:
+                                        repair_resp = formatter.run(repair_prompt)
+                                        final_data = extract_payload_from_response(repair_resp)
+                                    except Exception as exc:
+                                        print(f"[WARN] 格式修復失敗: {exc}")
+                            if routing_log:
+                                final_data["routing"] = routing_log
+                            if ocr_updates:
+                                final_data["documents_update"] = ocr_updates
+                            reasoning_summary = build_reasoning_summary(reasoning_fragments)
+                            if reasoning_summary:
+                                final_data["reasoning_summary"] = reasoning_summary
+                            news_docs = build_news_documents(
+                                final_data,
+                                last_user,
+                                use_web_search,
+                                seen_keys=streamed_news_keys,
+                                user_id=current_user_id,
+                            )
+                            if news_docs:
+                                existing_docs = final_data.get("documents_append") or []
+                                final_data["documents_append"] = existing_docs + news_docs
+                            final_step = {
+                                "id": "response-complete",
+                                "label": "任務完成",
+                                "status": "done",
+                                "eta": "完成",
+                                "stage": "complete",
+                            }
+                            if update_routing_log(routing_log, final_step):
+                                yield f"data: {json.dumps({'routing_update': final_step})}\n\n"
+                            yield f"data: {json.dumps(final_data)}\n\n"
+                        else:
+                            # No content accumulated, send fallback response
+                            fallback = build_empty_response("抱歉，我無法完成這個請求。請稍後再試。")
+                            yield f"data: {json.dumps(fallback)}\n\n"
                 except Exception as exc:
                     error_response = build_empty_response(f"處理過程中發生錯誤：{str(exc)}")
                     yield f"data: {json.dumps(error_response)}\n\n"
-                
+
                 # 輸出計時總結
                 timings["done"] = time.time()
                 total_time = timings["done"] - timings["request_start"]
@@ -2549,58 +2590,90 @@ async def generate_artifacts(request: Request, req: ArtifactRequest):
                 media_type="text/event-stream",
                 headers=SSE_HEADERS,
             )
-        else:
-            # Non-streaming response
-            ocr_updates = run_ocr_for_documents(req.documents)
-            # RAG 索引已停用以提升速度，如需啟用請取消下方註解
-            # ensure_inline_documents_indexed(req.documents)
-            doc_ids = []
-            # doc_ids = [
-            #     doc.id
-            #     for doc in req.documents
-            #     if doc.id and doc.id in rag_store.docs
-            # ]
-            team = build_team(
-                doc_ids,
-                enable_web_search=use_web_search,
-                enable_vision=use_vision,
+
+        print(f"⏱️ [計時] 開始路由判斷")
+        route = run_router_agent(req.messages, req.documents, req.system_context)
+        route_time = time.time() - start_time
+        print(f"⏱️ [計時] 路由判斷完成，耗時: {route_time:.2f}秒, 結果: {route}")
+
+        if route and route.mode == "simple":
+            reply = run_smalltalk_agent(
+                req.messages, req.documents, req.system_context
             )
-            if use_web_search:
-                team.tool_choice = WEB_SEARCH_TOOL
-            doc_context = build_doc_context(
-                req.documents,
-                req.system_context.selected_doc_id if req.system_context else None,
-                include_content=not use_web_search or use_rag or use_vision,
-            )
-            prompt = f"{convo}\n\n{system_status}\n\n{doc_context}\n\n請依規則產出 JSON。"
-            response = team.run(
-                prompt,
-                dependencies={"doc_ids": doc_ids},
-                add_dependencies_to_context=True,
-                images=image_inputs if image_inputs else None,
-            )
-            data: Dict[str, Any] = extract_payload_from_response(response)
-            # Attach reasoning summary if available on the response object
-            reasoning_payload = getattr(response, "reasoning", None)
-            reasoning_summary = ""
-            if isinstance(reasoning_payload, dict):
-                reasoning_summary = reasoning_payload.get("summary") or reasoning_payload.get("text") or ""
-            if not reasoning_summary:
-                reasoning_summary = getattr(response, "reasoning_summary", "") or getattr(response, "reasoning_content", "")
-            reasoning_summary = (reasoning_summary or "").strip()
-            if reasoning_summary:
-                data["reasoning_summary"] = truncate_text(reasoning_summary, TRACE_MAX_LEN)
-            if ocr_updates:
-                data["documents_update"] = ocr_updates
-            news_docs = build_news_documents(
-                data,
-                last_user,
-                use_web_search,
-                user_id=current_user_id,
-            )
-            if news_docs:
-                data["documents_append"] = news_docs
-            return data
+            response_data = build_empty_response(reply)
+            return response_data
+
+        use_web_search = bool(route and route.needs_web_search)
+        use_rag = bool(route and route.needs_rag)
+        use_vision = bool(route and route.needs_vision) or bool(image_inputs)
+
+        # Non-streaming response
+        ocr_updates = run_ocr_for_documents(req.documents)
+        # RAG 索引已停用以提升速度，如需啟用請取消下方註解
+        # ensure_inline_documents_indexed(req.documents)
+        doc_ids = []
+        # doc_ids = [
+        #     doc.id
+        #     for doc in req.documents
+        #     if doc.id and doc.id in rag_store.docs
+        # ]
+        team = build_team(
+            doc_ids,
+            enable_web_search=use_web_search,
+            enable_vision=use_vision,
+        )
+        if use_web_search:
+            team.tool_choice = WEB_SEARCH_TOOL
+        doc_context = build_doc_context(
+            req.documents,
+            req.system_context.selected_doc_id if req.system_context else None,
+            include_content=not use_web_search or use_rag or use_vision,
+        )
+        prompt = TEAM_PROMPT_TEMPLATE.format(
+            convo=convo,
+            system_status=system_status,
+            doc_context=doc_context,
+        )
+        response = team.run(
+            prompt,
+            dependencies={"doc_ids": doc_ids},
+            add_dependencies_to_context=True,
+            images=image_inputs if image_inputs else None,
+        )
+        raw_text = response.get_content_as_string()
+        data: Dict[str, Any] = extract_payload_from_response(response)
+        if needs_format_retry(data, use_web_search):
+            raw_text = (raw_text or "").strip()
+            if raw_text:
+                raw_text = raw_text[-8000:]
+                formatter = build_formatter_agent()
+                repair_prompt = FORMATTER_REPAIR_PROMPT_TEMPLATE.format(raw_text=raw_text)
+                try:
+                    repair_resp = formatter.run(repair_prompt)
+                    data = extract_payload_from_response(repair_resp)
+                except Exception as exc:
+                    print(f"[WARN] 格式修復失敗: {exc}")
+        # Attach reasoning summary if available on the response object
+        reasoning_payload = getattr(response, "reasoning", None)
+        reasoning_summary = ""
+        if isinstance(reasoning_payload, dict):
+            reasoning_summary = reasoning_payload.get("summary") or reasoning_payload.get("text") or ""
+        if not reasoning_summary:
+            reasoning_summary = getattr(response, "reasoning_summary", "") or getattr(response, "reasoning_content", "")
+        reasoning_summary = (reasoning_summary or "").strip()
+        if reasoning_summary:
+            data["reasoning_summary"] = truncate_text(reasoning_summary, TRACE_MAX_LEN)
+        if ocr_updates:
+            data["documents_update"] = ocr_updates
+        news_docs = build_news_documents(
+            data,
+            last_user,
+            use_web_search,
+            user_id=current_user_id,
+        )
+        if news_docs:
+            data["documents_append"] = news_docs
+        return data
     except Exception as exc:  # noqa: BLE001
         return {
             "error": "LLM request failed",
@@ -2651,7 +2724,7 @@ async def export_and_send_news(req: ExportNewsRequest, request: Request):
         excel_result = generate_news_excel(
             document_name=req.document_name,
             document_content=req.document_content,
-            output_dir=str(output_dir)
+            output_dir=str(output_dir),
         )
         
         if not excel_result.get("success"):

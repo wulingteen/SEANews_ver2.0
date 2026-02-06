@@ -151,6 +151,10 @@ const predefinedStages = [
   { id: 'process', label: '處理內容', order: 3 },
   { id: 'complete', label: '任務完成', order: 4 },
 ];
+const stageLabelMap = predefinedStages.reduce((acc, stage) => {
+  acc[stage.id] = stage.label;
+  return acc;
+}, {});
 
 const initialRoutingSteps = [];
 
@@ -335,6 +339,8 @@ export default function App() {
   const [composerText, setComposerText] = useState('');
   const [activeTab, setActiveTab] = useState('documents');
   const [isLoading, setIsLoading] = useState(false);
+  const [requestStartedAt, setRequestStartedAt] = useState(0);
+  const [requestElapsedSeconds, setRequestElapsedSeconds] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
   const [streamingContent, setStreamingContent] = useState('');
   const [reasoningSummary, setReasoningSummary] = useState('');
@@ -403,6 +409,8 @@ export default function App() {
     setComposerText('');
     setReasoningSummary('');
     setStreamingContent('');
+    setRequestStartedAt(0);
+    setRequestElapsedSeconds(0);
   };
 
   const finalizeAuthenticatedSession = (token) => {
@@ -638,6 +646,22 @@ export default function App() {
     }
   }, [reasoningSummary]);
 
+  useEffect(() => {
+    if (!isLoading || !requestStartedAt) {
+      setRequestElapsedSeconds(0);
+      return;
+    }
+
+    const updateElapsed = () => {
+      const elapsed = Math.max(0, Math.floor((Date.now() - requestStartedAt) / 1000));
+      setRequestElapsedSeconds(elapsed);
+    };
+
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(timer);
+  }, [isLoading, requestStartedAt]);
+
   // 從數據庫載入新聞記錄（僅在登入後執行一次）
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -841,6 +865,8 @@ export default function App() {
   const latestRoutingStatus = latestRouting
     ? statusMeta[latestRouting.status] || null
     : null;
+  const latestRoutingClassName = latestRoutingStatus?.className || (isLoading ? 'is-running' : 'is-queued');
+  const latestRoutingLabel = latestRoutingStatus?.label || (isLoading ? '進行中' : '等待中');
   const isStatusLike = (value, statusLabel) => {
     if (!value) return false;
     const normalized = value.trim();
@@ -862,6 +888,13 @@ export default function App() {
     }
     return text || '—';
   })();
+  const currentStageLabel = currentStage
+    ? stageLabelMap[currentStage] || currentStage
+    : '需求分析';
+  const routingLiveText = isLoading
+    ? `目前階段：${currentStageLabel} · 已等待 ${requestElapsedSeconds} 秒`
+    : (routingSummaryText === '尚未啟動' ? '等待新任務' : routingSummaryText);
+  const recentRoutingSteps = routingSteps.slice(-4).reverse();
 
   const handleUploadClick = () => {
     fileInputRef.current?.click();
@@ -1386,6 +1419,8 @@ export default function App() {
     setMessages(outgoingMessages);
     setComposerText('');
     setIsLoading(true);
+    setRequestStartedAt(Date.now());
+    setRequestElapsedSeconds(0);
     setErrorMessage('');
     setStreamingContent('');
     setRoutingSteps([]);
@@ -1536,21 +1571,10 @@ export default function App() {
                 }
               }
 
-              // [UX Fix] Handle log chunks to show real-time progress
               if (parsed.log_chunk) {
                 setReasoningSummary((prev) => {
                   const newLog = parsed.log_chunk.replace(/^🧠 \[推理日誌\]\s*/, '') + '\n';
                   return prev + newLog;
-                });
-                continue;
-              }
-
-              // 處理 LLM 處理日誌（替代推理摘要）
-              if (parsed.log_chunk) {
-                setReasoningSummary((prev) => {
-                  const updated = prev + parsed.log_chunk + '\n';
-                  console.log('📋 [處理日誌]', parsed.log_chunk);
-                  return updated;
                 });
                 continue;
               }
@@ -1772,6 +1796,7 @@ export default function App() {
       setCompletedStages([]);
     } finally {
       setIsLoading(false);
+      setRequestStartedAt(0);
       setStreamingContent('');
     }
   };
@@ -2388,13 +2413,31 @@ export default function App() {
                   })}
                 </div>
 
-                {/* 處理日誌區域（固定高度） */}
-                {reasoningSummary ? (
-                  <div className="routing-reasoning">
+                <div className="routing-summary">
+                  <span className={`status-pill ${latestRoutingClassName}`}>{latestRoutingLabel}</span>
+                  <span className="routing-summary-text">{routingLiveText}</span>
+                </div>
 
-                    <div className="routing-reasoning-text" ref={logContainerRef}>{reasoningSummary}</div>
+                <div className="routing-events">
+                  {recentRoutingSteps.length > 0 ? (
+                    recentRoutingSteps.map((step) => (
+                      <div className="routing-event-item" key={step.id}>
+                        <span className="routing-event-label">{step.label || '任務更新'}</span>
+                        <span className="routing-event-meta">{step.eta || '—'}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="routing-events-empty">
+                      {isLoading ? '系統準備中...' : '尚未啟動'}
+                    </div>
+                  )}
+                </div>
+
+                <div className="routing-reasoning">
+                  <div className="routing-reasoning-text" ref={logContainerRef}>
+                    {reasoningSummary || (isLoading ? '正在分析中，稍候會顯示詳細處理日誌...' : '尚無處理日誌')}
                   </div>
-                ) : null}
+                </div>
               </div>
 
               <div className="chat-composer">

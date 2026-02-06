@@ -615,6 +615,49 @@ body {
   flex: 1;
 }
 
+.routing-events {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 108px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.routing-event-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  border-bottom: 1px dashed rgba(34, 49, 70, 0.12);
+  padding-bottom: 4px;
+}
+
+.routing-event-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.routing-event-label {
+  color: var(--ink-soft);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.routing-event-meta {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.routing-events-empty {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .routing-reasoning {
   display: flex;
   flex-direction: column;

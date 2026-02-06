@@ -73,11 +73,15 @@ def main() -> int:
     google_client_front = os.getenv("VITE_GOOGLE_CLIENT_ID", "").strip()
     google_client_back = os.getenv("GOOGLE_CLIENT_ID", "").strip()
 
-    if google_client_front or google_client_back:
-        if not google_client_front or not google_client_back:
-            errors.append("VITE_GOOGLE_CLIENT_ID and GOOGLE_CLIENT_ID must both be set")
-        elif google_client_front != google_client_back:
-            errors.append("VITE_GOOGLE_CLIENT_ID must match GOOGLE_CLIENT_ID")
+    if google_client_back:
+        if google_client_front and google_client_front != google_client_back:
+            warnings.append(
+                "VITE_GOOGLE_CLIENT_ID differs from GOOGLE_CLIENT_ID; frontend will use runtime config from backend"
+            )
+    elif google_client_front:
+        warnings.append(
+            "VITE_GOOGLE_CLIENT_ID is set but GOOGLE_CLIENT_ID is empty; Google login verification will fail on backend"
+        )
     else:
         warnings.append("Google OAuth is disabled (client IDs are empty)")
 

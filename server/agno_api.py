@@ -399,6 +399,10 @@ def parse_csv_env(env_key: str) -> List[str]:
     return [value.strip() for value in os.getenv(env_key, "").split(",") if value.strip()]
 
 
+def get_google_client_ids() -> List[str]:
+    return parse_csv_env("GOOGLE_CLIENT_ID")
+
+
 def normalize_auth_user(user: Optional[Dict[str, Any]]) -> Dict[str, Optional[str]]:
     if isinstance(user, dict):
         user_id = str(user.get("id", "")).strip()
@@ -451,7 +455,7 @@ def verify_google_credential(credential: str) -> Dict[str, Any]:
     if google_auth_requests is None or google_id_token is None:
         raise RuntimeError("伺服器缺少 google-auth 套件，請先安裝依賴")
 
-    client_ids = parse_csv_env("GOOGLE_CLIENT_ID")
+    client_ids = get_google_client_ids()
     if not client_ids:
         raise RuntimeError("Google 登入尚未設定 GOOGLE_CLIENT_ID")
 
@@ -1986,6 +1990,36 @@ async def login_with_google(request: GoogleLoginRequest):
     except Exception as exc:
         print(f"Google 登录错误: {exc}")
         return LoginResponse(success=False, error="Google 驗證失敗，請重新登入")
+
+
+@app.get("/api/auth/google/config")
+async def get_google_auth_config():
+    client_ids = get_google_client_ids()
+    if not client_ids:
+        return {
+            "enabled": False,
+            "client_id": "",
+            "message": "Google OAuth 尚未設定（缺少 GOOGLE_CLIENT_ID）",
+        }
+
+    if google_auth_requests is None or google_id_token is None:
+        return {
+            "enabled": False,
+            "client_id": client_ids[0],
+            "message": "伺服器缺少 google-auth 套件，請先安裝依賴",
+        }
+
+    allowed_domains = [domain.lower() for domain in parse_csv_env("GOOGLE_ALLOWED_DOMAINS")]
+    domain_hint = (
+        f"限定網域：{', '.join(allowed_domains)}"
+        if allowed_domains
+        else "未限制登入網域"
+    )
+    return {
+        "enabled": True,
+        "client_id": client_ids[0],
+        "message": f"Google OAuth 已啟用（{domain_hint}）",
+    }
 
 
 class VerifyTokenRequest(BaseModel):

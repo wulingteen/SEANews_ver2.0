@@ -17,8 +17,9 @@
    OPENAI_MODEL=gpt-4o-mini
    PORT=8787
    VITE_API_URL=http://localhost:8787
-   VITE_GOOGLE_CLIENT_ID=your_google_web_client_id
    GOOGLE_CLIENT_ID=your_google_web_client_id
+   # 可選：前端 build-time 覆寫（未設定時會自動讀後端 runtime config）
+   VITE_GOOGLE_CLIENT_ID=your_google_web_client_id
    ```
    使用 `npm run dev` 時可省略 `VITE_API_URL`（前端會走 proxy）。
 2. 建立 Python venv 並安裝 Agno 服務端依賴
@@ -50,20 +51,20 @@ python3 server/validate_env.py
 ```
 
 ## Google OAuth Setup
-本專案採用 Google Identity Services（ID token）登入流程，前後端都要使用同一組 Web Client ID。
+本專案採用 Google Identity Services（ID token）登入流程，後端需要 `GOOGLE_CLIENT_ID` 來驗證 token；前端可選擇用 `VITE_GOOGLE_CLIENT_ID`，或由後端 runtime config 自動提供。
 
 1. 在 Google Cloud Console 建立 **OAuth 2.0 Client ID (Web application)**。
 2. 在 **Authorized JavaScript origins** 加入：
    - `http://127.0.0.1:5176`
    - `http://localhost:5176`
    - 你的正式網域（例如 `https://your-domain.com`）
-3. 將同一個 Client ID 設到 `.env`：
-   - `VITE_GOOGLE_CLIENT_ID=<your_web_client_id>`
-   - `GOOGLE_CLIENT_ID=<your_web_client_id>`
+3. 將 Client ID 設到 `.env`：
+   - `GOOGLE_CLIENT_ID=<your_web_client_id>`（必填）
+   - `VITE_GOOGLE_CLIENT_ID=<your_web_client_id>`（可選）
 4. 若只允許公司網域登入，可設定：
    - `GOOGLE_ALLOWED_DOMAINS=example.com,example.org`
 
-說明：目前流程不使用 OAuth redirect callback，主要依賴前端取得 ID token 後送到後端驗證。
+說明：目前流程不使用 OAuth redirect callback，主要依賴前端取得 ID token 後送到後端驗證。若未設定 `VITE_GOOGLE_CLIENT_ID`，前端會呼叫 `/api/auth/google/config` 讀取後端設定。
 
 ## Trace / Streaming Events
 後端 `POST /api/artifacts` 會以 SSE 串流傳回：

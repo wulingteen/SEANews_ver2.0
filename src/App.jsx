@@ -42,7 +42,7 @@ const createId = () => Math.random().toString(36).slice(2, 10);
 const apiBase = import.meta.env.DEV
   ? ''
   : '';
-const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim();
+const GOOGLE_CLIENT_ID_FROM_ENV = (import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim();
 const GOOGLE_IDENTITY_SCRIPT_ID = 'google-identity-service';
 
 const nowTime = () =>
@@ -313,6 +313,8 @@ export default function App() {
   const [loginError, setLoginError] = useState('');
   const [isGoogleAvailable, setIsGoogleAvailable] = useState(false);
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
+  const [googleClientId, setGoogleClientId] = useState(() => GOOGLE_CLIENT_ID_FROM_ENV);
+  const [googleConfigMessage, setGoogleConfigMessage] = useState('');
   const googleButtonRef = useRef(null);
 
   const [documents, setDocuments] = useState(initialDocs);
@@ -512,7 +514,54 @@ export default function App() {
 
   useEffect(() => {
     if (isAuthChecking || isAuthenticated) return;
-    if (!GOOGLE_CLIENT_ID) {
+
+    let isCancelled = false;
+
+    const loadGoogleConfig = async () => {
+      if (GOOGLE_CLIENT_ID_FROM_ENV) {
+        setGoogleClientId(GOOGLE_CLIENT_ID_FROM_ENV);
+      }
+
+      try {
+        const response = await fetch(`${apiBase || ''}/api/auth/google/config`);
+        if (!response.ok) {
+          if (!GOOGLE_CLIENT_ID_FROM_ENV && !isCancelled) {
+            setGoogleClientId('');
+            setGoogleConfigMessage('Google OAuth 設定檢查失敗，請確認後端服務');
+          }
+          return;
+        }
+
+        const data = await response.json();
+        if (isCancelled) return;
+
+        const runtimeClientId = (data?.client_id || '').trim();
+        if (runtimeClientId) {
+          setGoogleClientId(runtimeClientId);
+        } else if (!GOOGLE_CLIENT_ID_FROM_ENV) {
+          setGoogleClientId('');
+        }
+
+        const message = typeof data?.message === 'string' ? data.message.trim() : '';
+        setGoogleConfigMessage(message);
+      } catch (error) {
+        if (isCancelled) return;
+        if (!GOOGLE_CLIENT_ID_FROM_ENV) {
+          setGoogleClientId('');
+          setGoogleConfigMessage('Google OAuth 尚未完成伺服器設定');
+        }
+      }
+    };
+
+    loadGoogleConfig();
+    return () => {
+      isCancelled = true;
+    };
+  }, [isAuthChecking, isAuthenticated]);
+
+  useEffect(() => {
+    if (isAuthChecking || isAuthenticated) return;
+    if (!googleClientId) {
       setIsGoogleAvailable(false);
       return;
     }
@@ -525,7 +574,7 @@ export default function App() {
       if (!googleId || !googleButtonRef.current) return;
 
       googleId.initialize({
-        client_id: GOOGLE_CLIENT_ID,
+        client_id: googleClientId,
         callback: (response) => {
           const credential = response?.credential || '';
           if (!credential) {
@@ -582,7 +631,7 @@ export default function App() {
       script.removeEventListener('load', onLoad);
       script.removeEventListener('error', onError);
     };
-  }, [isAuthChecking, isAuthenticated]);
+  }, [isAuthChecking, isAuthenticated, googleClientId]);
 
   // 驗證已存在的 token（有效則自動登入）
   useEffect(() => {
@@ -1899,7 +1948,7 @@ export default function App() {
                 登入
               </Button>
 
-              {GOOGLE_CLIENT_ID ? (
+              {googleClientId ? (
                 <>
                   <div className="login-divider">或使用 Google 帳號登入</div>
                   <div className="google-login-block">
@@ -1914,7 +1963,7 @@ export default function App() {
                 </>
               ) : (
                 <Text className="login-helper-text">
-                  尚未設定 Google OAuth（`VITE_GOOGLE_CLIENT_ID`），目前使用帳密登入。
+                  {googleConfigMessage || '尚未設定 Google OAuth（GOOGLE_CLIENT_ID），目前使用帳密登入。'}
                 </Text>
               )}
             </form>

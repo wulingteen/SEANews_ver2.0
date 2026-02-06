@@ -99,6 +99,36 @@ const estimatePages = (content) => {
 
 const initialDocs = [];
 
+const RECIPIENT_EMAIL_HISTORY_KEY = 'recipientEmailHistory';
+const MAX_RECIPIENT_EMAIL_HISTORY = 10;
+
+const isValidEmailAddress = (email = '') => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+
+const loadRecipientEmailHistory = () => {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(RECIPIENT_EMAIL_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((entry) => typeof entry === 'string')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  } catch (error) {
+    console.warn('Failed to load recipient email history:', error);
+    return [];
+  }
+};
+
+const persistRecipientEmailHistory = (history) => {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(RECIPIENT_EMAIL_HISTORY_KEY, JSON.stringify(history));
+  } catch (error) {
+    console.warn('Failed to persist recipient email history:', error);
+  }
+};
 
 // 預定義的任務階段
 const predefinedStages = [
@@ -211,6 +241,7 @@ export default function App() {
   const [currentDocForExport, setCurrentDocForExport] = useState(null); // 要匯出的文件
   const [showExportModal, setShowExportModal] = useState(false); // 匯出對話框
   const [recipientEmail, setRecipientEmail] = useState(''); // 收件人郵箱
+  const [recipientEmailHistory, setRecipientEmailHistory] = useState(() => loadRecipientEmailHistory());
   const [isExporting, setIsExporting] = useState(false); // 匯出中
   const [selectedNewsIds, setSelectedNewsIds] = useState([]); // 多選新聞 ID
   const [showBatchExportModal, setShowBatchExportModal] = useState(false); // 批次匯出對話框
@@ -795,7 +826,24 @@ export default function App() {
   // 開啟匯出對話框
   const handleOpenExportModal = (doc) => {
     setCurrentDocForExport(doc);
+    if (!recipientEmail.trim() && recipientEmailHistory[0]) {
+      setRecipientEmail(recipientEmailHistory[0]);
+    }
     setShowExportModal(true);
+  };
+
+  const recordRecipientEmailHistory = (email) => {
+    const trimmed = (email || '').trim();
+    if (!isValidEmailAddress(trimmed)) return;
+
+    setRecipientEmailHistory((prev) => {
+      const next = [
+        trimmed,
+        ...prev.filter((existing) => existing.toLowerCase() !== trimmed.toLowerCase()),
+      ].slice(0, MAX_RECIPIENT_EMAIL_HISTORY);
+      persistRecipientEmailHistory(next);
+      return next;
+    });
   };
 
   // 匯出並發送郵件
@@ -805,7 +853,7 @@ export default function App() {
       return;
     }
 
-    if (!recipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+    if (!recipientEmail || !isValidEmailAddress(recipientEmail)) {
       setErrorMessage('請輸入有效的郵箱地址');
       return;
     }
@@ -829,6 +877,7 @@ export default function App() {
       const result = await response.json();
 
       if (result.success) {
+        recordRecipientEmailHistory(recipientEmail);
         setShowExportModal(false);
         setRecipientEmail('');
         setCurrentDocForExport(null);
@@ -873,6 +922,9 @@ export default function App() {
       alert('請先勾選要匯出的新聞');
       return;
     }
+    if (!batchRecipientEmail.trim() && recipientEmailHistory[0]) {
+      setBatchRecipientEmail(recipientEmailHistory[0]);
+    }
     setShowBatchExportModal(true);
   };
 
@@ -883,7 +935,7 @@ export default function App() {
       return;
     }
 
-    if (!batchRecipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(batchRecipientEmail)) {
+    if (!batchRecipientEmail || !isValidEmailAddress(batchRecipientEmail)) {
       setErrorMessage('請輸入有效的郵箱地址');
       return;
     }
@@ -912,6 +964,7 @@ export default function App() {
       const result = await response.json();
 
       if (result.success) {
+        recordRecipientEmailHistory(batchRecipientEmail);
         setShowBatchExportModal(false);
         setBatchRecipientEmail('');
         setSelectedNewsIds([]);
@@ -1444,6 +1497,11 @@ export default function App() {
         neutralColor: '#1c1a18',
       }}
     >
+      <datalist id="recipient-email-history-list">
+        {recipientEmailHistory.map((email) => (
+          <option key={email} value={email} />
+        ))}
+      </datalist>
       {!isAuthenticated ? (
         <div className="login-container">
           <div className="login-box">
@@ -2063,6 +2121,7 @@ export default function App() {
                   </Text>
                   <input
                     type="email"
+                    list="recipient-email-history-list"
                     value={recipientEmail}
                     onChange={(e) => setRecipientEmail(e.target.value)}
                     placeholder="請輸入收件人郵箱地址"
@@ -2074,6 +2133,32 @@ export default function App() {
                       fontSize: '14px'
                     }}
                   />
+                  {recipientEmailHistory.length > 0 ? (
+                    <div style={{ marginTop: '10px' }}>
+                      <Text size="small" style={{ color: '#6c757d', marginBottom: '6px', display: 'block' }}>
+                        最近使用
+                      </Text>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {recipientEmailHistory.map((email) => (
+                          <button
+                            key={`export-email-${email}`}
+                            type="button"
+                            onClick={() => setRecipientEmail(email)}
+                            style={{
+                              border: 'none',
+                              background: 'transparent',
+                              padding: 0,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <Tag size="small" variant="borderless">
+                              {email}
+                            </Tag>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
                 <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                   <Button
@@ -2159,6 +2244,7 @@ export default function App() {
                   </Text>
                   <input
                     type="email"
+                    list="recipient-email-history-list"
                     value={batchRecipientEmail}
                     onChange={(e) => setBatchRecipientEmail(e.target.value)}
                     placeholder="請輸入收件人郵箱地址"
@@ -2170,6 +2256,32 @@ export default function App() {
                       fontSize: '14px'
                     }}
                   />
+                  {recipientEmailHistory.length > 0 ? (
+                    <div style={{ marginTop: '10px' }}>
+                      <Text size="small" style={{ color: '#6c757d', marginBottom: '6px', display: 'block' }}>
+                        最近使用
+                      </Text>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {recipientEmailHistory.map((email) => (
+                          <button
+                            key={`batch-email-${email}`}
+                            type="button"
+                            onClick={() => setBatchRecipientEmail(email)}
+                            style={{
+                              border: 'none',
+                              background: 'transparent',
+                              padding: 0,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <Tag size="small" variant="borderless">
+                              {email}
+                            </Tag>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
                 <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                   <Button

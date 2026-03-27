@@ -2300,17 +2300,29 @@ body {
     page-break-inside: auto;
     border-collapse: collapse !important;
     width: 100% !important;
+    table-layout: fixed !important;
   }
 
   .markdown-body th,
   .markdown-body td {
     border: 1px solid #000 !important;
-    padding: 4px 8px !important;
+    padding: 4px 6px !important;
     color: #000 !important;
+    font-size: 9pt !important;
+    word-break: break-all !important;
+    overflow-wrap: break-word !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
   }
 
   .markdown-body tr {
     page-break-inside: avoid;
+  }
+
+  /* Prevent long URLs from breaking layout */
+  .markdown-body a {
+    word-break: break-all !important;
+    overflow-wrap: break-word !important;
   }
 
   .markdown-body hr {

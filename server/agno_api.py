@@ -1050,6 +1050,12 @@ def parse_news_articles_streaming(content: str) -> List[Dict[str, str]]:
     """流式解析：只回傳已完成的新聞（排除最後一段未結束的 section）"""
     import re
 
+    # Guard: if the content looks like a structured analysis report
+    # (contains ## module headers like '## 一、' or '## 模組'), do NOT extract news
+    module_header_pattern = re.compile(r'^##\s+[一二三四五六七八九十]', re.MULTILINE)
+    if module_header_pattern.search(content):
+        return []
+
     # 嘗試 ### 格式
     sections = re.split(r'\n###\s+', content)
     if len(sections) > 2:

@@ -5,9 +5,9 @@
 # ==========================================
 
 # 0. Check Environment
-if [ ! -d ".venv" ]; then
-    echo "❌ Error: Virtual environment (.venv) not found."
-    echo "Please run: python3 -m venv .venv && .venv/bin/pip install -r server/requirements.txt"
+if [ ! -d ".venv3" ]; then
+    echo "❌ Error: Virtual environment (.venv3) not found."
+    echo "Please run: python3 -m.venv3 .venv3 && .venv3/bin/pip install -r server/requirements.txt"
     exit 1
 fi
 
@@ -26,8 +26,8 @@ if lsof -i :8787 > /dev/null; then
     lsof -ti :8787 | xargs kill -9
 fi
 
-# Run uvicorn via venv python
-.venv/bin/python -m uvicorn server.agno_api:app --reload --host 0.0.0.0 --port 8787 &
+# Run uvicorn via.venv3 python
+.venv3/bin/python -m uvicorn server.agno_api:app --reload --host 0.0.0.0 --port 8787 &
 BACKEND_PID=$!
 echo "✓ Backend started (PID: $BACKEND_PID)"
 

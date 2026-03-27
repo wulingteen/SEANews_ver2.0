@@ -8,6 +8,7 @@ import pytest
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import agno_api  # noqa: E402
+from prompt_config import TRACE_TEST_INSTRUCTIONS  # noqa: E402
 from agno.run.agent import RunEvent  # noqa: E402
 from agno.run.team import TeamRunEvent  # noqa: E402
 
@@ -92,9 +93,7 @@ def test_live_stream_events():
         members=[],
         model=model,
         tools=[agno_api.WEB_SEARCH_TOOL],
-        instructions=[
-            "你是測試代理，必須先使用 web_search 後再回覆。",
-        ],
+        instructions=TRACE_TEST_INSTRUCTIONS,
         markdown=False,
     )
     team.tool_choice = agno_api.WEB_SEARCH_TOOL

@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import uuid
 import time
 import secrets
@@ -482,7 +483,110 @@ def get_model_id() -> str:
     return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
-WEB_SEARCH_TOOL = {"type": "web_search_preview"}
+# ---------------------------------------------------------------------------
+# SearXNG-backed deterministic web search (replaces OpenAI web_search_preview)
+# ---------------------------------------------------------------------------
+import httpx
+
+SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8080/search")
+
+# Context variable: the streaming handler injects per-request constraints here
+# so the tool function can read them without extra LLM cooperation.
+_search_max_results: ContextVar[int] = ContextVar("_search_max_results", default=10)
+_search_time_range: ContextVar[str] = ContextVar("_search_time_range", default="")
+
+
+def _parse_search_constraints(user_message: str) -> tuple[int, str]:
+    """Extract [搜尋限制] block from the user message.
+
+    Returns (max_results, time_range) where time_range is one of
+    SearXNG's accepted values: day, week, month, year, or empty string.
+    """
+    max_results = 10
+    time_range = ""
+
+    block_match = re.search(r"\[搜尋限制\](.+)", user_message, re.S)
+    if not block_match:
+        return max_results, time_range
+
+    block = block_match.group(1)
+
+    # Parse max article count  (e.g. 最多回傳 2 則)
+    count_match = re.search(r"最多.*?(\d+)\s*則", block)
+    if count_match:
+        max_results = int(count_match.group(1))
+
+    # Parse date range  (e.g. 最近 7 天 / 最近 14 天 / 最近 30 天)
+    days_match = re.search(r"最近\s*(\d+)\s*天", block)
+    if days_match:
+        days = int(days_match.group(1))
+        if days <= 1:
+            time_range = "day"
+        elif days <= 7:
+            time_range = "week"
+        elif days <= 30:
+            time_range = "month"
+        else:
+            time_range = "year"
+
+    return max_results, time_range
+
+
+def custom_web_search(query: str) -> str:
+    """Search the web using the local SearXNG instance.
+
+    The number of results and time range are controlled by the per-request
+    context variables ``_search_max_results`` and ``_search_time_range``,
+    which are set by the streaming handler before the agent runs.
+
+    Args:
+        query: The search query string.
+
+    Returns:
+        A formatted string of search results.
+    """
+    max_results = _search_max_results.get()
+    time_range = _search_time_range.get()
+
+    # Aggressively strip any hallucinated date constraints from the LLM's query
+    # since we are exclusively using SearXNG's time_range parameter now.
+    clean_query = re.sub(r'\b(?:after|before|since|from):\s*\S+', '', query, flags=re.IGNORECASE).strip()
+
+    params: dict = {
+        "q": clean_query,
+        "format": "json",
+        "categories": "general,news",
+    }
+    if time_range:
+        params["time_range"] = time_range
+
+    try:
+        with httpx.Client(timeout=20) as client:
+            resp = client.get(SEARXNG_URL, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        return f"[SearXNG 搜尋失敗: {exc}]"
+
+    results = data.get("results", [])[:max_results]
+    if not results:
+        return "[搜尋無結果]"
+
+    lines: list[str] = []
+    for i, r in enumerate(results, 1):
+        title = r.get("title", "(無標題)")
+        url = r.get("url", "")
+        snippet = r.get("content", "")
+        pub = r.get("publishedDate", "")
+        lines.append(f"{i}. {title}\n   日期: {pub}\n   {snippet}\n   {url}")
+
+    header = f"[SearXNG 搜尋結果: 共 {len(results)} 筆 (上限 {max_results}), 時間範圍: {time_range or '不限'}]"
+    return header + "\n\n" + "\n\n".join(lines)
+
+
+# Keep a dict form for places that formerly used the OpenAI tool spec;
+# the research agent now uses the Python callable directly.
+WEB_SEARCH_TOOL = custom_web_search
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 TRACE_MAX_LEN = int(os.getenv("AGNO_TRACE_MAX_LEN", "2000"))
 TRACE_ARGS_MAX_LEN = int(os.getenv("AGNO_TRACE_ARGS_MAX_LEN", "1000"))
@@ -831,8 +935,6 @@ def needs_format_retry(payload: Dict[str, Any], use_web_search: bool) -> bool:
     assistant_content = (payload.get("assistant") or {}).get("content", "").strip()
     if not assistant_content:
         return True
-    if use_web_search and "###" not in assistant_content:
-        return True
     return False
 
 
@@ -926,17 +1028,20 @@ def parse_news_section(section: str) -> Optional[Dict[str, str]]:
 
 
 def parse_news_articles(content: str) -> List[Dict[str, str]]:
-    """解析新聞內容，返回獨立新聞列表"""
+    """解析新聞內容，返回獨立新聞列表（支援 ### 格式與 Markdown 表格格式）"""
     import re
 
     articles: List[Dict[str, str]] = []
-    # 使用 ### 作為新聞分隔符
+    # 方法一：使用 ### 作為新聞分隔符（舊格式）
     sections = re.split(r'\n###\s+', content)
-
     for section in sections:
         article = parse_news_section(section)
         if article:
             articles.append(article)
+
+    # 方法二：若 ### 格式找不到，嘗試從 Markdown 表格提取（六模組格式）
+    if not articles:
+        articles = parse_news_from_table(content)
 
     return articles
 
@@ -945,16 +1050,81 @@ def parse_news_articles_streaming(content: str) -> List[Dict[str, str]]:
     """流式解析：只回傳已完成的新聞（排除最後一段未結束的 section）"""
     import re
 
+    # 嘗試 ### 格式
     sections = re.split(r'\n###\s+', content)
-    if len(sections) <= 2:
-        return []
+    if len(sections) > 2:
+        complete_sections = sections[:-1]
+        articles: List[Dict[str, str]] = []
+        for section in complete_sections:
+            article = parse_news_section(section)
+            if article:
+                articles.append(article)
+        if articles:
+            return articles
 
-    complete_sections = sections[:-1]
-    articles: List[Dict[str, str]] = []
-    for section in complete_sections:
-        article = parse_news_section(section)
-        if article:
-            articles.append(article)
+    # 嘗試 Markdown 表格格式
+    return parse_news_from_table(content)
+
+
+def parse_news_from_table(content: str) -> List[Dict[str, str]]:
+    """從六模組分析報告的 Markdown 表格中提取新聞文章 (已禁用，避免把分析報告的表格切成單獨文件)"""
+    return []
+
+    for row in table_rows:
+        # 跳過表頭分隔行
+        if re.match(r'^[\s|:-]+$', row):
+            continue
+
+        cells = [cell.strip() for cell in row.split('|')]
+        # 移除空的首尾 cells（因 split 的 leading/trailing |）
+        cells = [c for c in cells if c]
+
+        if len(cells) < 4:
+            continue
+
+        # 跳過表頭行（常見表頭詞）
+        header_keywords = ['序號', '標題', '事件', '發布', '來源', '日期', '類型', '情緒', '強度', '影響', '概率', '衝擊', '贏家', '輸家', '項目', '說明', '範圍']
+        if any(keyword in cells[0] or keyword in cells[1] for keyword in header_keywords):
+            continue
+
+        # 嘗試提取：序號, 標題, 事件類型, 發布日期, 來源
+        title = cells[1] if len(cells) > 1 else ''
+        event_type = cells[2] if len(cells) > 2 else ''
+        publish_date = cells[3] if len(cells) > 3 else ''
+        source_cell = cells[4] if len(cells) > 4 else ''
+
+        # 從來源 cell 提取 URL：[名稱](URL) 格式
+        url = ''
+        url_match = re.search(r'\[([^\]]*?)\]\((https?://[^)]+)\)', source_cell)
+        if url_match:
+            url = url_match.group(2)
+        else:
+            # 純 URL 文字
+            url_match2 = re.search(r'https?://[^\s|)]+', source_cell)
+            if url_match2:
+                url = url_match2.group(0)
+
+        # 驗證標題有效性
+        if not title or len(title) < 3:
+            continue
+
+        # 組合 content
+        content_text = f'事件類型：{event_type}\n' if event_type else ''
+        if publish_date:
+            content_text += f'發布時間：{publish_date}\n'
+        if url:
+            content_text += url
+
+        if not content_text.strip() or len(content_text) < 10:
+            continue
+
+        articles.append({
+            'title': title,
+            'content': content_text.strip(),
+            'publish_date': publish_date,
+            'url': url,
+        })
+
     return articles
 
 
@@ -1209,11 +1379,11 @@ def build_news_documents(
         return []
 
     if not use_web_search:
-        # Allow parsing if the assistant content already looks like a news list
-        if "###" not in assistant_content:
+        # Allow parsing if the assistant content looks like a news list (### or table)
+        if "###" not in assistant_content and "|" not in assistant_content:
             return []
     
-    # 解析新聞列表
+    # 解析新聞列表（支援 ### 格式和 Markdown 表格格式）
     articles = parse_news_articles(assistant_content)
     if not articles:
         return []
@@ -1782,18 +1952,25 @@ def build_research_agent() -> Agent:
         "【信任網域查詢模板 - 直接複製使用】",
         query_templates,
         "",
-    ] + RESEARCH_INSTRUCTIONS_SUFFIX
+    ] + RESEARCH_INSTRUCTIONS_SUFFIX + [
+        "",
+        "【嚴格搜尋限制 — 必須遵守】",
+        "使用者訊息末尾的 [搜尋限制] 區塊定義了本次搜尋的硬性約束。",
+        "- '最多回傳 N 則' 代表你最終回覆中新聞數量的絕對上限，不得超過。",
+        "- '最近 N 天' 代表你只能回報該時間範圍內的新聞，超過的必須捨棄。",
+        "你呼叫 custom_web_search 工具時，系統已在 API 層強制執行這些限制。",
+        "即使搜尋結果很多，你仍然必須在最終回覆中只列出符合限制的數量。",
+    ]
 
     return Agent(
         name="Deep Research Agent",
         role="東南亞新聞深度搜尋專員",
         model=model,
-        # Web search 工具不支援 JSON mode；此處避免強制 JSON mode
         instructions=instructions,
-        tools=[WEB_SEARCH_TOOL],
+        tools=[custom_web_search],
         search_knowledge=True,
         add_knowledge_to_context=True,
-        markdown=False,  # 外層需輸出 JSON；Markdown 內容放在 assistant.content
+        markdown=False,
     )
 
 
@@ -2372,6 +2549,19 @@ async def generate_artifacts(request: Request, req: ArtifactRequest):
                         if use_web_search and not use_vision:
                             # 優化：直接使用 Research Agent，跳過 Team Leader 推理以節省時間
                             print(f"⚡ [優化] 直接使用 Research Agent (跳過 Team Leader)")
+
+                            # --- Inject search constraints from user message ---
+                            last_user_msg = ""
+                            for m in reversed(req.messages):
+                                if m.role == "user":
+                                    last_user_msg = m.content or ""
+                                    break
+                            sr_max, sr_time = _parse_search_constraints(last_user_msg)
+                            _search_max_results.set(sr_max)
+                            _search_time_range.set(sr_time)
+                            print(f"🔒 [搜尋限制] max_results={sr_max}, time_range={sr_time!r}")
+                            # --------------------------------------------------
+
                             runner = build_research_agent()
                             timings["team_built"] = time.time()
                         else:
@@ -2384,10 +2574,8 @@ async def generate_artifacts(request: Request, req: ArtifactRequest):
 
                         print(f"⏱️ [計時] Runner 建立完成: {timings['team_built'] - timings['request_start']:.2f}s")
 
-                        if use_web_search:
-                            # 確保 Research Agent 也有這個屬性
-                            if hasattr(runner, 'tool_choice'):
-                                runner.tool_choice = WEB_SEARCH_TOOL
+                        # No tool_choice override needed; the Agent uses the
+                        # custom_web_search callable directly.
 
                         doc_context = build_doc_context(
                             req.documents,
@@ -2533,23 +2721,56 @@ async def generate_artifacts(request: Request, req: ArtifactRequest):
 
                         # Parse and send final complete message
                         if accumulated or final_payload:
+                            # Step 1: Try to parse JSON response from LLM
+                            final_data = None
                             if accumulated:
-                                final_data = normalize_response_payload(safe_parse_json(accumulated))
-                            else:
-                                final_data = final_payload or build_empty_response("")
+                                try:
+                                    parsed_json = json.loads(accumulated)
+                                    if isinstance(parsed_json, dict):
+                                        final_data = normalize_response_payload(parsed_json)
+                                except json.JSONDecodeError:
+                                    # Try to extract JSON from markdown-wrapped response
+                                    start = accumulated.find("{")
+                                    end = accumulated.rfind("}")
+                                    if start != -1 and end != -1 and end > start:
+                                        try:
+                                            parsed_json = json.loads(accumulated[start:end+1])
+                                            if isinstance(parsed_json, dict):
+                                                final_data = normalize_response_payload(parsed_json)
+                                        except json.JSONDecodeError:
+                                            pass
+                            
+                            if not final_data and final_payload:
+                                final_data = final_payload
+                            
+                            if not final_data:
+                                final_data = build_empty_response("")
+                            
+                            # Step 2: Check if we have actual content in assistant
                             assistant_content = (final_data.get("assistant") or {}).get("content", "").strip()
-                            if not assistant_content:
-                                # Try to recover assistant.content from raw stream or use raw markdown
+                            
+                            # Step 3: If assistant content is empty or looks like an error,
+                            # use the raw accumulated markdown directly
+                            is_error_msg = assistant_content.startswith("抱歉，處理過程中發生問題")
+                            if not assistant_content or is_error_msg:
                                 recovered = extract_assistant_content_from_json(accumulated)
                                 if not recovered:
                                     recovered = extract_json_string_field(accumulated, "assistant.content")
-                                if not recovered and "###" in accumulated:
+                                if not recovered and accumulated and len(accumulated.strip()) > 0:
                                     recovered = accumulated.strip()
                                 if recovered:
                                     final_data["assistant"] = {
                                         "content": recovered,
                                         "bullets": [],
                                     }
+                                    assistant_content = recovered
+                            
+                            # Step 4: Always populate summary.output from assistant content
+                            # so the frontend can display it in the analysis report section
+                            if assistant_content and not (final_data.get("summary") or {}).get("output"):
+                                if "summary" not in final_data or not isinstance(final_data["summary"], dict):
+                                    final_data["summary"] = {"output": "", "borrower": {"name": "", "description": "", "rating": ""}, "metrics": [], "risks": []}
+                                final_data["summary"]["output"] = assistant_content
                             if needs_format_retry(final_data, use_web_search):
                                 raw_text = assistant_content or extract_assistant_content_from_json(accumulated) or accumulated
                                 raw_text = (raw_text or "").strip()
@@ -2569,16 +2790,9 @@ async def generate_artifacts(request: Request, req: ArtifactRequest):
                             reasoning_summary = build_reasoning_summary(reasoning_fragments)
                             if reasoning_summary:
                                 final_data["reasoning_summary"] = reasoning_summary
-                            news_docs = build_news_documents(
-                                final_data,
-                                last_user,
-                                use_web_search,
-                                seen_keys=streamed_news_keys,
-                                user_id=current_user_id,
-                            )
-                            if news_docs:
-                                existing_docs = final_data.get("documents_append") or []
-                                final_data["documents_append"] = existing_docs + news_docs
+                            # NOTE: News documents are already extracted during streaming via
+                            # parse_news_articles_streaming. Do NOT re-parse the final report
+                            # here, as it would duplicate the analysis content into the doc tray.
                             final_step = {
                                 "id": "response-complete",
                                 "label": "任務完成",
@@ -2656,8 +2870,7 @@ async def generate_artifacts(request: Request, req: ArtifactRequest):
             enable_web_search=use_web_search,
             enable_vision=use_vision,
         )
-        if use_web_search:
-            team.tool_choice = WEB_SEARCH_TOOL
+        # tool_choice not needed; tools=[custom_web_search] is set in agent
         doc_context = build_doc_context(
             req.documents,
             req.system_context.selected_doc_id if req.system_context else None,

@@ -135,7 +135,7 @@ body {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.4fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
   flex: 1;
@@ -535,11 +535,6 @@ body {
   }
   50% {
     box-shadow: 0 0 0 6px rgba(24, 144, 255, 0.2);
-  }
-}
-  }
-  50% {
-    box-shadow: 0 0 0 8px rgba(24, 144, 255, 0.2);
   }
 }
 
@@ -1271,14 +1266,30 @@ body {
 .markdown-body table {
   width: 100%;
   border-collapse: collapse;
-  margin: 8px 0;
+  margin: 24px 0;
+  border-top: 2px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+  font-size: 13px;
 }
 
 .markdown-body th,
 .markdown-body td {
-  border: 1px solid rgba(34, 26, 20, 0.12);
-  padding: 6px 8px;
+  border: none;
+  padding: 10px 12px;
   text-align: left;
+}
+
+.markdown-body th {
+  border-bottom: 1px solid var(--ink);
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: var(--ink);
+  background: transparent;
+}
+
+.markdown-body td {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  color: var(--ink-soft);
 }
 
 .live-markdown {
@@ -2162,4 +2173,154 @@ body {
   color: #666;
   font-size: 13px;
   text-align: center;
+}
+
+/* ==========================================================================
+   Print / Professional Report PDF Export Styles
+   ========================================================================== */
+@media print {
+  /* 1. HIDE everything that is NOT the analysis report */
+  .artifact-header,
+  .chat-panel,
+  .panel-actions,
+  .panel-header,
+  .panel-tabs,
+  .task-documents-section,
+  .doc-tray-wrapper,
+  .routing-panel,
+  .translation-tabs,
+  .preview-actions,
+  .live-markdown-hint,
+  .streaming-wrapper,
+  button,
+  .tab-placeholder {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  /* 2. Pure white background on everything */
+  *, *::before, *::after {
+    background: #ffffff !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  body, html {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    min-height: auto !important;
+    height: auto !important;
+  }
+
+  .artifact-app {
+    padding: 0 !important;
+    margin: 0 !important;
+    min-height: auto !important;
+    height: auto !important;
+  }
+
+  .artifact-app::before,
+  .artifact-app::after {
+    display: none !important;
+  }
+
+  /* 3. FLATTEN the 2-column grid → single column, full width */
+  .artifact-shell {
+    display: block !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+  }
+
+  /* 4. Strip all panel chrome (borders, shadows, backgrounds, rounding) */
+  .artifact-panel,
+  .panel,
+  .artifact-stack,
+  .preview-card,
+  .preview-documents,
+  .live-markdown,
+  .task-analysis-section,
+  .task-view-container {
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    border-radius: 0 !important;
+    display: block !important;
+    visibility: visible !important;
+  }
+
+  /* 5. CRITICAL: override the inline overflowY:auto on .preview-canvas */
+  .preview-canvas {
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    padding: 20px !important;
+    overflow: visible !important;
+    overflow-y: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  /* 6. Markdown body typography for print */
+  .markdown-body {
+    font-size: 12pt !important;
+    line-height: 1.6 !important;
+    color: #000000 !important;
+    max-width: 100% !important;
+    overflow: visible !important;
+  }
+
+  .markdown-body h1,
+  .markdown-body h2,
+  .markdown-body h3 {
+    page-break-after: avoid;
+    color: #000000 !important;
+  }
+
+  .markdown-body p,
+  .markdown-body ul,
+  .markdown-body ol {
+    page-break-inside: avoid;
+  }
+
+  .markdown-body table {
+    page-break-inside: auto;
+    border-collapse: collapse !important;
+    width: 100% !important;
+  }
+
+  .markdown-body th,
+  .markdown-body td {
+    border: 1px solid #000 !important;
+    padding: 4px 8px !important;
+    color: #000 !important;
+  }
+
+  .markdown-body tr {
+    page-break-inside: avoid;
+  }
+
+  .markdown-body hr {
+    border: none !important;
+    border-top: 1px solid #ccc !important;
+    margin: 16px 0 !important;
+  }
+
+  .markdown-body a {
+    color: #000 !important;
+    text-decoration: underline !important;
+  }
 }

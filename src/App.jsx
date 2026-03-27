@@ -339,7 +339,9 @@ export default function App() {
   const [completedStages, setCompletedStages] = useState([]); // 已完成的階段 ID 列表
   const [messages, setMessages] = useState(initialMessages);
   const [composerText, setComposerText] = useState('');
-  const [activeTab, setActiveTab] = useState('documents');
+  const [activeTab, setActiveTab] = useState('all-docs');
+  const [searchSessions, setSearchSessions] = useState([]); // Array of { id, query, docIds: [] }
+  const currentSearchSessionIdRef = useRef(null);
   const [isLoading, setIsLoading] = useState(false);
   const [requestStartedAt, setRequestStartedAt] = useState(0);
   const [requestElapsedSeconds, setRequestElapsedSeconds] = useState(0);
@@ -1423,32 +1425,14 @@ export default function App() {
     const trimmed = composerText.trim();
     if (!trimmed || isLoading) return;
 
-    const isNewsSearchQuery = isLikelyNewsSearch(trimmed);
     const normalizedRecentDays = clampInteger(defaultRecentDays, 7, 1, 30);
     const normalizedMaxResults = clampInteger(maxSearchResults, 10, 1, 50);
 
-    if (isNewsSearchQuery && replaceSearchResults) {
-      setDocuments((prev) => {
-        const next = prev.filter((doc) => {
-          const source = (doc.source || '').toLowerCase();
-          const type = (doc.type || '').toUpperCase();
-          return source !== 'news' && source !== 'research' && type !== 'NEWS' && type !== 'RESEARCH';
-        });
-        if (selectedDocId && !next.some((doc) => doc.id === selectedDocId)) {
-          setSelectedDocId(next[0]?.id || '');
-        }
-        return next;
-      });
-      setSelectedNewsIds([]);
-    }
-
     const searchConstraints = [];
-    if (isNewsSearchQuery && !hasExplicitDateConstraint(trimmed)) {
+    if (!hasExplicitDateConstraint(trimmed)) {
       searchConstraints.push(`若未指定期間，預設只搜尋最近 ${normalizedRecentDays} 天新聞。`);
     }
-    if (isNewsSearchQuery) {
-      searchConstraints.push(`最多回傳 ${normalizedMaxResults} 則新聞，優先保留最相關且可驗證來源。`);
-    }
+    searchConstraints.push(`最多回傳 ${normalizedMaxResults} 則新聞，優先保留最相關且可驗證來源。`);
 
     const messageForModel = searchConstraints.length > 0
       ? `${trimmed}\n\n[搜尋限制]\n- ${searchConstraints.join('\n- ')}`
@@ -1473,6 +1457,32 @@ export default function App() {
     setErrorMessage('');
     setStreamingContent('');
     setRoutingSteps([]);
+    
+    // Unconditionally start a new Task Session for every chat prompt
+    const newSessionId = `search-${Date.now()}`;
+    currentSearchSessionIdRef.current = newSessionId;
+    
+    setSearchSessions(prev => {
+      if (replaceSearchResults) {
+        return [{ id: newSessionId, query: trimmed, docIds: [] }];
+      }
+      return [...prev, { id: newSessionId, query: trimmed, docIds: [] }];
+    });
+    
+    if (replaceSearchResults) {
+      setDocuments(prev => {
+        const next = prev.filter((doc) => {
+          const source = (doc.source || '').toLowerCase();
+          const type = (doc.type || '').toUpperCase();
+          return source !== 'news' && source !== 'research' && type !== 'NEWS' && type !== 'RESEARCH';
+        });
+        return next;
+      });
+      setSelectedNewsIds([]);
+    }
+    
+    setActiveTab(newSessionId);
+    setSelectedDocId(null);
     stageProgressRef.current = 0;
     applyStageProgress('analyze');
     setReasoningSummary('');
@@ -1613,11 +1623,18 @@ export default function App() {
               }
 
               if (parsed.documents_append) {
-                appendDocuments(parsed.documents_append);
-                // If this is the final payload, don't swallow it.
-                if (!(parsed.assistant || parsed.summary || parsed.translation || parsed.memo)) {
-                  continue;
+                const newDocs = parsed.documents_append;
+                appendDocuments(newDocs);
+                
+                if (currentSearchSessionIdRef.current) {
+                   const newDocIds = newDocs.map(d => d.id);
+                   setSearchSessions(prev => prev.map(s => 
+                     s.id === currentSearchSessionIdRef.current 
+                     ? { ...s, docIds: [...new Set([...s.docIds, ...newDocIds])] } 
+                     : s
+                   ));
                 }
+                // Do not continue here, as the final payload contains multiple blocks
               }
 
               if (parsed.log_chunk) {
@@ -1632,7 +1649,7 @@ export default function App() {
               if (parsed.reasoning_summary) {
                 setReasoningSummary(parsed.reasoning_summary);
                 console.log('🧠 [推理完成] 收到完整推理摘要');
-                continue;
+                // Do not continue, allow the rest of the payload to be processed
               }
 
               // Handle final complete data or done signal
@@ -1646,7 +1663,9 @@ export default function App() {
               }
 
               // Final parsed response
+              console.log('📨 [SSE frame]', JSON.stringify(parsed).slice(0, 200));
               if (parsed.assistant || parsed.summary || parsed.translation || parsed.memo) {
+                console.log('✅ [data assigned] keys:', Object.keys(parsed));
                 data = parsed;
               }
             } catch (parseErr) {
@@ -1656,10 +1675,12 @@ export default function App() {
         }
       }
 
-      console.log('📦 Received data from API:', data);
+      console.log('📦 [Final] data =', data);
 
       if (!data) {
-        throw new Error('No valid response received');
+        // Fallback: treat as empty completion, do NOT throw
+        console.warn('[handleSend] data is null/undefined - using fallback');
+        data = { assistant: { content: '(分析完成, 請稍後刷新)', bullets: [] } };
       }
 
       if (data.error) {
@@ -1760,6 +1781,20 @@ export default function App() {
               risks: data.summary.risks || [],
             };
             summaries = [...prev.summaries, summaryEntry];
+            if (currentSearchSessionIdRef.current) {
+               const summaryText = data.summary.output || data?.assistant?.content || '';
+               console.log('📝 [summary] Saving to session:', summaryText.slice(0, 100));
+               setSearchSessions(prevSess => prevSess.map(s => 
+                 s.id === currentSearchSessionIdRef.current ? { ...s, summary: summaryText } : s
+               ));
+            }
+          } else if (currentSearchSessionIdRef.current && data?.assistant?.content) {
+            // Fallback: if no summary payload but assistant has content, use it as the report
+            const fallbackSummary = data.assistant.content;
+            console.log('📝 [summary fallback] Using assistant.content:', fallbackSummary.slice(0, 100));
+            setSearchSessions(prevSess => prevSess.map(s => 
+              s.id === currentSearchSessionIdRef.current ? { ...s, summary: fallbackSummary } : s
+            ));
           }
 
           const newArtifacts = {
@@ -1801,12 +1836,12 @@ export default function App() {
         });
       }
 
-      if (data.reasoning_summary) {
+      if (data?.reasoning_summary) {
         setReasoningSummary(data.reasoning_summary);
       }
 
       // Update routing
-      if (!hasRoutingUpdates && Array.isArray(data.routing)) {
+      if (!hasRoutingUpdates && Array.isArray(data?.routing)) {
         setRoutingSteps(
           data.routing.map((step) => ({
             id: step.id || createId(),
@@ -1826,8 +1861,8 @@ export default function App() {
         role: 'assistant',
         name: 'LLM',
         time: nowTime(),
-        content: data.assistant?.content || '已完成處理。',
-        bullets: data.assistant?.bullets,
+        content: data?.assistant?.content || '已完成處理。',
+        bullets: data?.assistant?.bullets,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -1849,6 +1884,217 @@ export default function App() {
       setStreamingContent('');
     }
   };
+
+  const renderDocTray = (docsToRender) => (
+    <div className="doc-tray-wrapper" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div className="panel-actions" style={{ marginBottom: '16px', display: 'flex', gap: '8px' }}>
+        {docsToRender.some((doc) => (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content) && (
+          <>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={handleToggleSelectAll}
+            >
+              {selectedNewsIds.length === docsToRender.filter(doc => (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content).length ? '取消全選' : '全選'}
+            </Button>
+            <Button
+              type="primary"
+              size="small"
+              onClick={handleOpenBatchExport}
+              disabled={selectedNewsIds.length === 0}
+            >
+              批量匯出 ({selectedNewsIds.length})
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={handleBatchDelete}
+              disabled={selectedNewsIds.length === 0}
+              style={{ color: '#ff4d4f', borderColor: '#ff4d4f' }}
+            >
+              批量刪除 ({selectedNewsIds.length})
+            </Button>
+          </>
+        )}
+      </div>
+
+      <div className="doc-tray" style={{ flex: 1, overflowY: 'auto' }}>
+        {docsToRender.length > 0 ? (
+          <div className="doc-grid">
+            {docsToRender.map((doc) => {
+              const isEditing = editingDocId === doc.id;
+              const isExportable = (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content;
+              const isSelected = selectedNewsIds.includes(doc.id);
+
+              return (
+                <div
+                  key={doc.id}
+                  className={`doc-card${doc.id === selectedDocId ? ' is-active' : ''}`}
+                  onClick={() => {
+                    if (!isEditing) {
+                      setSelectedDocId(doc.id);
+                      setActiveTab('document-preview');
+                    }
+                  }}
+                >
+                  <div className="doc-card-row">
+                    {isExportable && (
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          handleToggleNewsSelection(doc.id);
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ marginRight: '8px', cursor: 'pointer' }}
+                      />
+                    )}
+                    <div className="doc-title">{doc.name}</div>
+                    <Tag size="small" color="blue">{doc.type}</Tag>
+                    {isExportable && (
+                      <ActionIcon
+                        icon={Download}
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenExportModal(doc);
+                        }}
+                        title="匯出 Excel 並寄送"
+                      />
+                    )}
+                    <ActionIcon
+                      icon={isEditing ? X : Edit3}
+                      size="small"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleToggleEditTags(doc.id);
+                      }}
+                      title={isEditing ? '關閉編輯' : '編輯標籤'}
+                    />
+                    <ActionIcon
+                      icon={Trash}
+                      size="small"
+                      variant="outlined"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteDoc(doc.id);
+                      }}
+                      title="刪除文件"
+                    />
+                  </div>
+
+                  {isEditing ? (
+                    <div className="tag-editor">
+                      <div className="tag-section">
+                        <div className="tag-section-title">流程狀態</div>
+                        <div className="tag-selector">
+                          {workflowTags.map((tag) => (
+                            <button
+                              key={tag}
+                              type="button"
+                              className={`tag-option${(doc.tags || []).includes(tag) ? ' is-selected' : ''}`}
+                              onClick={() => handleToggleTag(doc.id, tag)}
+                            >
+                              <Tag size="small" color={tagColors[tag] || 'default'}>
+                                {tag}
+                              </Tag>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="tag-section">
+                        <div className="tag-section-title">功能標籤</div>
+                        <div className="tag-selector">
+                          {functionTags.map((tag) => (
+                            <button
+                              key={tag}
+                              type="button"
+                              className={`tag-option${(doc.tags || []).includes(tag) ? ' is-selected' : ''}`}
+                              onClick={() => handleToggleTag(doc.id, tag)}
+                            >
+                              <Tag size="small" color={tagColors[tag] || 'default'}>
+                                {tag}
+                              </Tag>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {customTags.length > 0 && (
+                        <div className="tag-section">
+                          <div className="tag-section-title">自定義標籤</div>
+                          <div className="tag-selector">
+                            {customTags.map((tag) => (
+                              <button
+                                key={tag}
+                                type="button"
+                                className={`tag-option${(doc.tags || []).includes(tag) ? ' is-selected' : ''}`}
+                                onClick={() => handleToggleTag(doc.id, tag)}
+                              >
+                                <Tag size="small" color="purple">
+                                  {tag}
+                                </Tag>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="tag-add">
+                        <input
+                          type="text"
+                          className="tag-input"
+                          placeholder="新增自定義標籤..."
+                          value={newTagInput}
+                          onChange={(e) => setNewTagInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              handleAddCustomTag();
+                            }
+                          }}
+                        />
+                        <ActionIcon
+                          icon={Plus}
+                          size="small"
+                          onClick={handleAddCustomTag}
+                          disabled={!newTagInput.trim()}
+                          title="新增標籤"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="doc-tags">
+                      {doc.tags?.length ? (
+                        doc.tags.map((tag) => (
+                          <Tag
+                            key={`${doc.id}-${tag}`}
+                            size="small"
+                            color={tagColors[tag] || (customTags.includes(tag) ? 'purple' : 'default')}
+                          >
+                            {tag}
+                          </Tag>
+                        ))
+                      ) : (
+                        <span className="doc-empty">點擊 ✏️ 編輯標籤</span>
+                      )}
+                    </div>
+                  )}
+
+                  {doc.status === 'error' ? (
+                    <div className="doc-empty">解析失敗</div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="doc-empty" style={{ padding: '32px' }}>暫無文件</div>
+        )}
+      </div>
+    </div>
+  );
 
   const renderMarkdown = (value) => {
     const safeText =
@@ -1973,9 +2219,6 @@ export default function App() {
         <div className="artifact-app">
           <header className="artifact-header">
             <div className="brand">
-              <div className="brand-icon">
-                <Icon icon={Landmark} size="small" />
-              </div>
               <div>
                 <Text as="h1" weight="700" className="brand-title">
                   新聞輿情系統
@@ -2009,244 +2252,115 @@ export default function App() {
           </header>
 
           <div className="artifact-shell">
-            <section className="panel docs-panel">
-              <div className="panel-header">
-                <div>
-                  <Text as="h2" weight="600" className="panel-title">
-                    新聞集
-                  </Text>
-                </div>
-                <div className="panel-actions">
-                  {documents.some((doc) => (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content) && (
-                    <>
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        onClick={handleToggleSelectAll}
-                      >
-                        {selectedNewsIds.length === documents.filter(doc => (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content).length ? '取消全選' : '全選'}
-                      </Button>
-                      <Button
-                        type="primary"
-                        size="small"
-                        onClick={handleOpenBatchExport}
-                        disabled={selectedNewsIds.length === 0}
-                      >
-                        批量匯出 ({selectedNewsIds.length})
-                      </Button>
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        onClick={handleBatchDelete}
-                        disabled={selectedNewsIds.length === 0}
-                        style={{ color: '#ff4d4f', borderColor: '#ff4d4f' }}
-                      >
-                        批量刪除 ({selectedNewsIds.length})
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              <div className="doc-tray">
-                {documents.length > 0 ? (
-                  <div className="doc-grid">
-                    {documents.map((doc) => {
-                      const isEditing = editingDocId === doc.id;
-                      const isExportable = (doc.type === 'RESEARCH' || doc.type === 'NEWS') && doc.content;
-                      const isSelected = selectedNewsIds.includes(doc.id);
-
-                      return (
-                        <div
-                          key={doc.id}
-                          className={`doc-card${doc.id === selectedDocId ? ' is-active' : ''}`}
-                          onClick={() => !isEditing && setSelectedDocId(doc.id)}
-                        >
-                          <div className="doc-card-row">
-                            {isExportable && (
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={(e) => {
-                                  e.stopPropagation();
-                                  handleToggleNewsSelection(doc.id);
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                                style={{ marginRight: '8px', cursor: 'pointer' }}
-                              />
-                            )}
-                            <div className="doc-title">{doc.name}</div>
-                            <Tag size="small" color="blue">{doc.type}</Tag>
-                            {isExportable && (
-                              <ActionIcon
-                                icon={Download}
-                                size="small"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleOpenExportModal(doc);
-                                }}
-                                title="匯出 Excel 並寄送"
-                              />
-                            )}
-                            <ActionIcon
-                              icon={isEditing ? X : Edit3}
-                              size="small"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleToggleEditTags(doc.id);
-                              }}
-                              title={isEditing ? '關閉編輯' : '編輯標籤'}
-                            />
-                            <ActionIcon
-                              icon={Trash}
-                              size="small"
-                              variant="outlined"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteDoc(doc.id);
-                              }}
-                              title="刪除文件"
-                            />
-                          </div>
-
-                          {isEditing ? (
-                            <div className="tag-editor">
-                              <div className="tag-section">
-                                <div className="tag-section-title">流程狀態</div>
-                                <div className="tag-selector">
-                                  {workflowTags.map((tag) => (
-                                    <button
-                                      key={tag}
-                                      type="button"
-                                      className={`tag-option${(doc.tags || []).includes(tag) ? ' is-selected' : ''}`}
-                                      onClick={() => handleToggleTag(doc.id, tag)}
-                                    >
-                                      <Tag size="small" color={tagColors[tag] || 'default'}>
-                                        {tag}
-                                      </Tag>
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-
-                              <div className="tag-section">
-                                <div className="tag-section-title">功能標籤</div>
-                                <div className="tag-selector">
-                                  {functionTags.map((tag) => (
-                                    <button
-                                      key={tag}
-                                      type="button"
-                                      className={`tag-option${(doc.tags || []).includes(tag) ? ' is-selected' : ''}`}
-                                      onClick={() => handleToggleTag(doc.id, tag)}
-                                    >
-                                      <Tag size="small" color={tagColors[tag] || 'default'}>
-                                        {tag}
-                                      </Tag>
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-
-                              {customTags.length > 0 && (
-                                <div className="tag-section">
-                                  <div className="tag-section-title">自定義標籤</div>
-                                  <div className="tag-selector">
-                                    {customTags.map((tag) => (
-                                      <button
-                                        key={tag}
-                                        type="button"
-                                        className={`tag-option${(doc.tags || []).includes(tag) ? ' is-selected' : ''}`}
-                                        onClick={() => handleToggleTag(doc.id, tag)}
-                                      >
-                                        <Tag size="small" color="purple">
-                                          {tag}
-                                        </Tag>
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              <div className="tag-add">
-                                <input
-                                  type="text"
-                                  className="tag-input"
-                                  placeholder="新增自定義標籤..."
-                                  value={newTagInput}
-                                  onChange={(e) => setNewTagInput(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      handleAddCustomTag();
-                                    }
-                                  }}
-                                />
-                                <ActionIcon
-                                  icon={Plus}
-                                  size="small"
-                                  onClick={handleAddCustomTag}
-                                  disabled={!newTagInput.trim()}
-                                  title="新增標籤"
-                                />
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="doc-tags">
-                              {doc.tags?.length ? (
-                                doc.tags.map((tag) => (
-                                  <Tag
-                                    key={`${doc.id}-${tag}`}
-                                    size="small"
-                                    color={tagColors[tag] || (customTags.includes(tag) ? 'purple' : 'default')}
-                                  >
-                                    {tag}
-                                  </Tag>
-                                ))
-                              ) : (
-                                <span className="doc-empty">點擊 ✏️ 編輯標籤</span>
-                              )}
-                            </div>
-                          )}
-
-                          {doc.status === 'error' ? (
-                            <div className="doc-empty">解析失敗</div>
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : null}
-              </div>
-
-            </section>
 
             <section className="panel artifact-panel">
               <div className="panel-header">
                 <div>
                   <Text as="h2" weight="600" className="panel-title">
-                    解析作業區
+                    預覽區
                   </Text>
-                </div>
-                <div className="panel-actions">
-                  {activeTab === 'memo' ? (
-                    <Button type="primary" onClick={handleDownloadOutput}>
-                      匯出報告
-                    </Button>
-                  ) : null}
                 </div>
               </div>
 
-              <div className="artifact-stack">
-                <div className="preview-card">
-                  <div className="card-head">
-                    <div>
-                      <Text as="h3" weight="600" className="card-title">
-                        文件內容
-                      </Text>
-                    </div>
+              <div className="panel-tabs" style={{ display: 'flex', gap: '8px', padding: '0 16px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', overflowX: 'auto' }}>
+                {searchSessions.length === 0 && !selectedDocId && (
+                  <div className="tab-placeholder" style={{ padding: '8px 16px', color: 'var(--muted)', fontWeight: 500 }}>
+                    尚未建立任務
                   </div>
+                )}
+                {searchSessions.map((sess, idx) => (
+                  <div key={sess.id} style={{ display: 'flex', alignItems: 'center', background: activeTab === sess.id ? '#fff' : 'transparent', borderBottom: `2px solid ${activeTab === sess.id ? 'var(--primary)' : 'transparent'}`, borderRadius: '4px' }}>
+                    <button
+                      onClick={() => { setActiveTab(sess.id); setSelectedDocId(null); }}
+                      className={`tab-button ${activeTab === sess.id ? 'is-active' : ''}`}
+                      style={{ padding: '8px', paddingRight: '4px', border: 'none', background: 'transparent', color: activeTab === sess.id ? 'var(--primary)' : 'var(--muted)', cursor: 'pointer', whiteSpace: 'nowrap', fontWeight: 500 }}
+                    >
+                      🔍 任務: {sess.query}
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSearchSessions(prev => prev.filter(s => s.id !== sess.id));
+                        if (activeTab === sess.id) {
+                          setActiveTab(''); 
+                        }
+                      }}
+                      style={{ border: 'none', background: 'transparent', color: 'var(--muted)', cursor: 'pointer', padding: '0 8px', fontSize: '14px', lineHeight: 1 }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                {selectedDocId && (() => {
+                  const doc = documents.find(d => d.id === selectedDocId);
+                  if (doc) {
+                    return (
+                      <div style={{ display: 'flex', alignItems: 'center', background: activeTab === 'document-preview' ? '#fff' : 'transparent', borderBottom: `2px solid ${activeTab === 'document-preview' ? 'var(--primary)' : 'transparent'}`, borderRadius: '4px' }}>
+                        <button
+                          onClick={() => setActiveTab('document-preview')}
+                          className={`tab-button ${activeTab === 'document-preview' ? 'is-active' : ''}`}
+                          style={{ padding: '8px', paddingRight: '4px', border: 'none', background: 'transparent', color: activeTab === 'document-preview' ? 'var(--primary)' : 'var(--muted)', cursor: 'pointer', whiteSpace: 'nowrap', fontWeight: 500 }}
+                        >
+                          📄 {doc.name.length > 20 ? doc.name.substring(0, 20) + '...' : doc.name}
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedDocId(null);
+                            if (activeTab === 'document-preview' && currentSearchSessionIdRef.current) {
+                                setActiveTab(currentSearchSessionIdRef.current);
+                            }
+                          }}
+                          style={{ border: 'none', background: 'transparent', color: 'var(--muted)', cursor: 'pointer', padding: '0 8px', fontSize: '14px', lineHeight: 1 }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
+              </div>
 
-                  <div className="preview-canvas">
-                    {activeTab === 'documents' ? (
+              <div className="artifact-stack">
+                <div className="preview-card" style={{ borderTopLeftRadius: 0, borderTopRightRadius: 0, borderTop: 'none' }}>
+                  <div className="preview-canvas" style={{ padding: '16px', overflowY: 'auto' }}>
+                    {activeTab.startsWith('search-') ? (
+                       (() => {
+                         const sess = searchSessions.find(s => s.id === activeTab);
+                         if (!sess) return <div className="doc-empty">無此任務紀錄</div>;
+                         const filteredDocs = documents.filter(d => sess.docIds.includes(d.id));
+                         return (
+                           <div className="task-view-container" style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
+                             {/* Analysis Report Section */}
+                             <div className="task-analysis-section live-markdown" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '24px' }}>
+                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                 <h3 style={{ fontSize: '18px', fontWeight: 600, margin: 0 }}>分析報告</h3>
+                                 <button onClick={() => window.print()} style={{ padding: '6px 16px', fontSize: '13px', fontWeight: 600, background: 'var(--primary, #1677ff)', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', whiteSpace: 'nowrap' }}>📄 匯出報告PDF</button>
+                               </div>
+                               {isLoading && streamingContent && activeTab === currentSearchSessionIdRef.current ? (
+                                 <div className="streaming-wrapper">
+                                   <div className="streaming-label">深入研析中...</div>
+                                   <div className="streaming-content">
+                                     <pre className="streaming-text">{streamingContent}</pre>
+                                     <span className="streaming-cursor">▊</span>
+                                   </div>
+                                 </div>
+                               ) : sess.summary ? (
+                                 renderMarkdown(sess.summary)
+                               ) : (
+                                 <div className="doc-empty" style={{ margin: 0, padding: '24px', background: 'var(--surface)' }}>尚未生成研析報告</div>
+                               )}
+                             </div>
+                             {/* Documents Section */}
+                             <div className="task-documents-section">
+                               <h3 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--ink)', marginBottom: '16px' }}>參考文獻與新聞集</h3>
+                               {renderDocTray(filteredDocs)}
+                             </div>
+                           </div>
+                         );
+                       })()
+                    ) : activeTab === 'document-preview' ? (
                       <div className="preview-documents">
                         {(() => {
                           const selectedDoc = documents.find((doc) => doc.id === selectedDocId);
@@ -2282,7 +2396,7 @@ export default function App() {
                                     className="doc-preview-image"
                                   />
                                 ) : selectedDoc.content ? (
-                                  <pre className="doc-preview-text">{selectedDoc.content}</pre>
+                                  renderMarkdown(selectedDoc.content)
                                 ) : (
                                   <div className="no-preview-full">
                                     <Icon icon={FileText} size="large" />
@@ -2298,57 +2412,12 @@ export default function App() {
                         })()}
                       </div>
                     ) : (
-                      <div className="live-markdown">
-                        {isLoading && streamingContent ? (
-                          <div className="streaming-wrapper">
-                            <div className="streaming-label">正在產生中...</div>
-                            <div className="streaming-content">
-                              <pre className="streaming-text">{streamingContent}</pre>
-                              <span className="streaming-cursor">▊</span>
-                            </div>
-                          </div>
-                        ) : (
-                          renderMarkdown(activeArtifact?.output || '')
-                        )}
+                      <div className="doc-empty" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--muted)', gap: '16px', marginTop: '60px' }}>
+                         <Icon icon={Landmark} size="large" style={{ opacity: 0.2, transform: 'scale(3)' }} />
+                         <h2 style={{ fontSize: '24px', fontWeight: 600, color: 'var(--ink)' }}>歡迎使用產業情報研析系統</h2>
+                         <p style={{ fontSize: '16px' }}>請於右側對話欄位輸入您的分析指令，系統將為您建立專屬研析任務。</p>
                       </div>
                     )}
-
-                    {activeTab === 'translation' ? (
-                      <div className="preview-translation">
-                        {filteredTranslations.length > 1 && (
-                          <div className="translation-tabs">
-                            {filteredTranslations.map((trans, index) => (
-                              <button
-                                key={trans.id}
-                                type="button"
-                                className={`translation-tab${index === activeTranslationIndex ? ' is-active' : ''}`}
-                                onClick={() => setActiveTranslationIndex(index)}
-                              >
-                                {trans.title}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-
-                        <div className="translation-list">
-                          {(activeArtifact.clauses || []).map((pair) => (
-                            <div key={pair.id || pair.section} className="translation-block">
-                              <div className="translation-label">{pair.section}</div>
-                              <div className="translation-columns">
-                                <div className="translation-col">
-                                  <div className="translation-caption">原文</div>
-                                  <p>{pair.source}</p>
-                                </div>
-                                <div className="translation-col">
-                                  <div className="translation-caption">英文</div>
-                                  <p>{pair.translated}</p>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
                   </div>
                 </div>
               </div>

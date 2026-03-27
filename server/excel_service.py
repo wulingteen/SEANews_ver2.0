@@ -10,6 +10,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 from openai import OpenAI
+from prompt_config import TRANSLATE_TITLES_PROMPT_TEMPLATE
 
 
 def extract_country_from_content(content: str, fallback_name: str = "") -> str:
@@ -57,6 +58,14 @@ def extract_country_from_content(content: str, fallback_name: str = "") -> str:
         'techinasia.com': '東南亞',
         'asia.nikkei.com': '東南亞',
         'heaptalk.com': '東南亞',
+        'cna.com.tw': '台灣',
+        'udn.com': '台灣',
+        'money.udn.com': '台灣',
+        'chinatimes.com': '台灣',
+        'libertytimes.com.tw': '台灣',
+        'ctee.com.tw': '台灣',
+        'businesstoday.com.tw': '台灣',
+        'cw.com.tw': '台灣',
     }
     
     # 嘗試從內容中的 URL 提取國家
@@ -179,12 +188,7 @@ def batch_translate_titles(titles: List[str]) -> Dict[str, str]:
         # 構建批次翻譯提示
         numbered_titles = "\n".join([f"{i+1}. {t}" for i, t in enumerate(titles_to_translate)])
         
-        prompt = f"""請將以下新聞標題翻譯成繁體中文。每行一個標題，保持編號對應。只需回答翻譯結果，不要有其他說明。
-
-原標題列表：
-{numbered_titles}
-
-繁體中文翻譯（保持編號格式）："""
+        prompt = TRANSLATE_TITLES_PROMPT_TEMPLATE.format(numbered_titles=numbered_titles)
         
         response = client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
